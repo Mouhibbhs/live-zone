@@ -488,34 +488,11 @@ export async function registerViewerAccount(input: {
     throw new Error("Email, password, and username are required.");
   }
 
-  const registerCallable = httpsCallable<
-    { email: string; password: string; username: string },
-    { uid: string; username: string }
-  >(getClientFunctions(), "registerViewerAccount");
-
-  try {
-    await registerCallable({
-      email,
-      password,
-      username: safeUsername,
-    });
-
-    await signInWithEmailAndPassword(getClientAuth(), email, password);
-
-    return {
-      username: safeUsername,
-    };
-  } catch (error) {
-    if (!shouldFallbackToClientRegistration(error)) {
-      throw error;
-    }
-
-    return registerViewerAccountDirect({
-      email,
-      password,
-      username: safeUsername,
-    });
-  }
+  return registerViewerAccountDirect({
+    email,
+    password,
+    username: safeUsername,
+  });
 }
 
 export async function setUsername(username: string): Promise<{ username: string }> {
