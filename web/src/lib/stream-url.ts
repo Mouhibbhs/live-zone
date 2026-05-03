@@ -5,9 +5,41 @@ const IPTV_PROXY_URL = process.env.NEXT_PUBLIC_IPTV_PROXY_URL?.trim().replace(/\
 const XTREAM_LIVE_STREAM_PATTERN =
   /^(https?:\/\/.+\/live\/[^/]+\/[^/]+\/[^/.?]+)(?:\.(?:m3u8|ts|m2ts|flv))?(\?.*)?$/i;
 
+function isLocalHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1";
+}
+
+function getProductionProxyBase(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  return `${window.location.origin}/api/proxy`;
+}
+
+function normalizeConfiguredProxyBase(proxyUrl: string): string {
+  if (!proxyUrl.includes("/.netlify/functions/proxy")) {
+    return proxyUrl;
+  }
+
+  if (typeof window !== "undefined" && !isLocalHost(window.location.hostname)) {
+    return getProductionProxyBase();
+  }
+
+  try {
+    const parsed = new URL(proxyUrl);
+    parsed.pathname = "/api/proxy";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return proxyUrl;
+  }
+}
+
 export function getIptvProxyBase(): string {
   if (IPTV_PROXY_URL) {
-    return IPTV_PROXY_URL;
+    return normalizeConfiguredProxyBase(IPTV_PROXY_URL);
   }
 
   if (typeof window === "undefined") {
@@ -16,11 +48,11 @@ export function getIptvProxyBase(): string {
 
   const host = window.location.hostname;
 
-  if (host === "localhost" || host === "127.0.0.1") {
+  if (isLocalHost(host)) {
     return "http://localhost:8787/proxy";
   }
 
-  return `${window.location.origin}/.netlify/functions/proxy`;
+  return getProductionProxyBase();
 }
 
 export function normalizeLiveStreamUrl(streamUrl: string, ext: "ts" | "m3u8" = "ts"): string {

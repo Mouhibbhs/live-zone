@@ -7,6 +7,10 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
 
+[[edge_functions]]
+  path = "/api/proxy"
+  function = "iptv-proxy"
+
 [[redirects]]
   from = "/player"
   to = "/player/index.html"

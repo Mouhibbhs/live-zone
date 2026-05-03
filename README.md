@@ -80,12 +80,12 @@ The static export is written to `web/out` and Firebase Hosting deploys that fold
 This project can also deploy to Netlify as:
 
 - a static Next.js export from `web/out`
-- a Netlify serverless IPTV proxy from `netlify/functions/proxy.mjs`
+- a Netlify Edge IPTV proxy from `netlify/edge-functions/iptv-proxy.mjs`
 
 Files added for Netlify:
 
 - `netlify.toml`
-- `netlify/functions/proxy.mjs`
+- `netlify/edge-functions/iptv-proxy.mjs`
 
 ### Netlify project settings
 
@@ -111,13 +111,13 @@ NEXT_PUBLIC_FIREBASE_APP_ID=...
 Optional override:
 
 ```text
-NEXT_PUBLIC_IPTV_PROXY_URL=https://your-site.netlify.app/.netlify/functions/proxy
+NEXT_PUBLIC_IPTV_PROXY_URL=https://your-site.netlify.app/api/proxy
 ```
 
 If you do not set `NEXT_PUBLIC_IPTV_PROXY_URL`, the app will automatically use:
 
 - `http://localhost:8787/proxy` on local development
-- `/.netlify/functions/proxy` on non-local hosts
+- `/api/proxy` on non-local hosts
 
 ### Important limitation
 
