@@ -37,8 +37,17 @@ type Strategy = {
 const XTREAM_LIVE_STREAM_PATTERN =
   /^(https?:\/\/.+\/live\/[^/]+\/[^/]+\/[^/.?]+)(?:\.(?:m3u8|ts|m2ts|flv))?(\?.*)?$/i;
 
+function unwrapProxyUrl(streamUrl: string) {
+  try {
+    const parsed = new URL(streamUrl);
+    return parsed.searchParams.get("url") || streamUrl;
+  } catch {
+    return streamUrl;
+  }
+}
+
 function buildDirectUrl(streamUrl: string, ext: "m3u8" | "ts") {
-  const trimmed = streamUrl.trim();
+  const trimmed = unwrapProxyUrl(streamUrl.trim());
   const match = trimmed.match(XTREAM_LIVE_STREAM_PATTERN);
 
   if (!match) {

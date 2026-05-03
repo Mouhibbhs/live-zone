@@ -337,7 +337,7 @@ function mapChannelDocument(id: string, data: Record<string, unknown>) {
     name: typeof data.name === "string" ? data.name : "",
     categoryId: typeof data.categoryId === "string" ? data.categoryId : "",
     logo: typeof data.logo === "string" && data.logo ? data.logo : null,
-    streamUrl: typeof data.streamUrl === "string" ? normalizeLiveStreamUrl(data.streamUrl) : "",
+    streamUrl: typeof data.streamUrl === "string" ? data.streamUrl : "",
     epgChannelId: typeof data.epgChannelId === "string" && data.epgChannelId ? data.epgChannelId : null,
   };
 }
@@ -541,7 +541,7 @@ export async function getLiveCatalog(_deviceId: string, _forceRefresh = false): 
       name: String(item.name ?? ""),
       categoryId: String(item.categoryId ?? ""),
       logo: typeof item.logo === "string" && item.logo ? item.logo : null,
-      streamUrl: normalizeLiveStreamUrl(String(item.streamUrl ?? "")),
+      streamUrl: String(item.streamUrl ?? ""),
       epgChannelId: typeof item.epgChannelId === "string" && item.epgChannelId ? item.epgChannelId : null,
     })),
   };
