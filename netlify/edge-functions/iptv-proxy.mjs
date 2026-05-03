@@ -3,7 +3,9 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Range",
   "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
-  "Cache-Control": "no-cache, no-store, must-revalidate",
+  "Cache-Control": "no-cache, no-store, must-revalidate, no-transform",
+  "Pragma": "no-cache",
+  "X-Accel-Buffering": "no",
 };
 
 function getProxyEndpoint(requestUrl) {
