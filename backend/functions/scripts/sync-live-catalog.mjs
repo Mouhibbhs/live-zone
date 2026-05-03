@@ -1,10 +1,9 @@
-import "dotenv/config";
-
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { config as loadDotenv } from "dotenv";
 import { applicationDefault, cert, getApps, initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
@@ -13,6 +12,9 @@ const rootDir = resolve(__dirname, "../../..");
 const envFilePath = resolve(rootDir, "backend/functions/.env");
 const serviceAccountPath = resolve(rootDir, "backend/functions/serviceAccountKey.json");
 const webPublicDir = resolve(rootDir, "web/public");
+
+loadDotenv({ path: envFilePath, override: true });
+
 const channelNameCollator = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: "base",
@@ -26,6 +28,28 @@ function getRequiredEnv(name) {
   }
 
   return value;
+}
+
+function getLocalEnvIptvConfig() {
+  const baseUrl = process.env.XTREAM_BASE_URL?.trim() ?? "";
+  const username = process.env.XTREAM_USERNAME?.trim() ?? "";
+  const password = process.env.XTREAM_PASSWORD?.trim() ?? "";
+
+  if (!baseUrl || !username || !password) {
+    return null;
+  }
+
+  return {
+    baseUrl: baseUrl.replace(/\/$/, ""),
+    username,
+    password,
+  };
+}
+
+function applyIptvConfig(config) {
+  process.env.XTREAM_BASE_URL = config.baseUrl;
+  process.env.XTREAM_USERNAME = config.username;
+  process.env.XTREAM_PASSWORD = config.password;
 }
 
 function normalizeLabel(value) {
@@ -93,17 +117,6 @@ async function loadFirestoreIptvConfig() {
   }
 }
 
-async function persistEnvConfig(config) {
-  const content = [
-    `XTREAM_BASE_URL=${config.baseUrl}`,
-    `XTREAM_USERNAME=${config.username}`,
-    `XTREAM_PASSWORD=${config.password}`,
-    "",
-  ].join("\n");
-
-  await writeFile(envFilePath, content, "utf8");
-}
-
 let authFailed = false;
 
 async function fetchJson(url) {
@@ -140,14 +153,18 @@ async function fetchJson(url) {
   return data;
 }
 
-const firestoreConfig = await loadFirestoreIptvConfig();
+const localEnvConfig = getLocalEnvIptvConfig();
 
-if (firestoreConfig) {
-  await persistEnvConfig(firestoreConfig);
-  process.env.XTREAM_BASE_URL = firestoreConfig.baseUrl;
-  process.env.XTREAM_USERNAME = firestoreConfig.username;
-  process.env.XTREAM_PASSWORD = firestoreConfig.password;
-  console.log(`Loaded IPTV settings from Firestore and wrote ${envFilePath}.`);
+if (localEnvConfig) {
+  applyIptvConfig(localEnvConfig);
+  console.log(`Loaded IPTV settings from ${envFilePath}.`);
+} else {
+  const firestoreConfig = await loadFirestoreIptvConfig();
+
+  if (firestoreConfig) {
+    applyIptvConfig(firestoreConfig);
+    console.log("Loaded IPTV settings from Firestore for this sync run.");
+  }
 }
 
 const baseUrl = getRequiredEnv("XTREAM_BASE_URL").replace(/\/$/, "");
