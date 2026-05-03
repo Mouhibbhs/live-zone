@@ -54,8 +54,7 @@ function buildUpstreamHeaders(request, targetUrl) {
   );
   headers.set("Accept", request.headers.get("accept") || "*/*");
   headers.set("Accept-Language", request.headers.get("accept-language") || "en-US,en;q=0.9");
-  headers.set("Origin", target.origin);
-  headers.set("Referer", `${target.origin}/`);
+  headers.set("Referer", target.origin);
 
   const range = request.headers.get("range");
   if (range) {

@@ -61,6 +61,15 @@ function buildProxyUrl(proxyBase: string, url: string) {
   return proxyBase ? `${proxyBase}?url=${encodeURIComponent(url)}` : "";
 }
 
+function shouldTryDirectPlayback(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  const host = window.location.hostname;
+  return host === "localhost" || host === "127.0.0.1";
+}
+
 function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()): Strategy[] {
   const directHls = buildDirectUrl(streamUrl, "m3u8");
   const directTs = buildDirectUrl(streamUrl, "ts");
@@ -84,11 +93,11 @@ function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()
     });
   });
 
-  if (directHls) {
+  if (shouldTryDirectPlayback() && directHls) {
     strategies.push({ kind: "hls", label: "Direct HLS", url: directHls });
   }
 
-  if (directTs) {
+  if (shouldTryDirectPlayback() && directTs) {
     strategies.push({ kind: "mpegts", label: "Direct MPEG-TS", url: directTs });
   }
 

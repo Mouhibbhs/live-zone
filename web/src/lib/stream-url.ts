@@ -50,8 +50,8 @@ export function getIptvProxyBases(): string[] {
 
   const bases = [
     IPTV_PROXY_URL ? normalizeConfiguredProxyBase(IPTV_PROXY_URL) : "",
-    getProductionProxyBase(),
     `${window.location.origin}/.netlify/functions/proxy`,
+    getProductionProxyBase(),
   ];
 
   return bases.filter((base, index, array) => base && array.indexOf(base) === index);
