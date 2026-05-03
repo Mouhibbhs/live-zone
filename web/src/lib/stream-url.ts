@@ -18,7 +18,19 @@ function getProductionProxyBase(): string {
 }
 
 function normalizeConfiguredProxyBase(proxyUrl: string): string {
-  return proxyUrl;
+  try {
+    const parsed = new URL(proxyUrl);
+
+    if (parsed.pathname === "/" || parsed.pathname === "") {
+      parsed.pathname = "/proxy";
+    }
+
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return proxyUrl;
+  }
 }
 
 export function hasConfiguredIptvProxy(): boolean {

@@ -44,7 +44,8 @@ function getContentType(pathname) {
 
 function getProxyEndpoint(req) {
   const forwardedProto = req.headers["x-forwarded-proto"];
-  const protocol = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto || "https";
+  const rawProtocol = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto || "https";
+  const protocol = String(rawProtocol).split(",")[0].trim() || "https";
   return `${protocol}://${req.headers.host}/proxy`;
 }
 

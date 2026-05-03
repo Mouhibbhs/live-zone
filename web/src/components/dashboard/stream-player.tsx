@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
 
 import type { LiveChannel } from "@/lib/types";
-import { getIptvProxyBases } from "@/lib/stream-url";
+import { getIptvProxyBases, hasConfiguredIptvProxy } from "@/lib/stream-url";
 
 type MpegtsPlayer = {
   attachMediaElement(mediaElement: HTMLMediaElement): void;
@@ -71,7 +71,7 @@ function shouldTryDirectPlayback(): boolean {
 }
 
 function shouldTryContinuousMpegTs(): boolean {
-  return true;
+  return shouldTryDirectPlayback() || hasConfiguredIptvProxy();
 }
 
 function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()): Strategy[] {
@@ -187,6 +187,26 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       }, 1200);
     }
 
+    function recoverCurrentPlayback(reason: string) {
+      if (!video || cancelled) {
+        return;
+      }
+
+      const currentStrategy = currentStrategyRef.current;
+
+      if (currentStrategy?.kind === "hls" && hlsRef.current) {
+        setStatus(`${currentStrategy.label} buffering: ${reason}`);
+        hlsRef.current.startLoad();
+        void video.play().catch(() => undefined);
+        return;
+      }
+
+      if (currentStrategy?.kind === "mpegts" && mpegtsRef.current) {
+        setStatus(`${currentStrategy.label} buffering: ${reason}`);
+        void video.play().catch(() => undefined);
+      }
+    }
+
     function cleanup() {
       clearReconnectTimer();
 
@@ -226,13 +246,16 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         const hls = new Hls({
           enableWorker: true,
           lowLatencyMode: false,
-          liveSyncDurationCount: 4,
-          liveMaxLatencyDurationCount: 8,
-          maxBufferLength: 90,
-          maxMaxBufferLength: 180,
-          backBufferLength: 120,
+          liveSyncDurationCount: 6,
+          liveMaxLatencyDurationCount: 12,
+          maxBufferLength: 60,
+          maxMaxBufferLength: 120,
+          backBufferLength: 45,
           liveDurationInfinity: true,
           maxLiveSyncPlaybackRate: 1.1,
+          maxBufferHole: 0.8,
+          nudgeOffset: 0.2,
+          nudgeMaxRetry: 5,
           manifestLoadingMaxRetry: 8,
           manifestLoadingRetryDelay: 1000,
           manifestLoadingMaxRetryTimeout: 8000,
@@ -342,15 +365,16 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
             enableWorker: true,
             enableStashBuffer: true,
             isLive: true,
-            stashInitialSize: 8192,
+            stashInitialSize: 1024 * 1024,
             lazyLoad: false,
             autoCleanupSourceBuffer: true,
-            autoCleanupMaxBackwardDuration: 45,
-            autoCleanupMinBackwardDuration: 15,
-            liveBufferLatencyChasing: true,
-            liveBufferLatencyChasingOnPaused: true,
-            liveBufferLatencyMaxLatency: 45,
-            liveBufferLatencyMinRemain: 12,
+            autoCleanupMaxBackwardDuration: 60,
+            autoCleanupMinBackwardDuration: 20,
+            fixAudioTimestampGap: true,
+            liveBufferLatencyChasing: false,
+            liveBufferLatencyChasingOnPaused: false,
+            liveBufferLatencyMaxLatency: 60,
+            liveBufferLatencyMinRemain: 20,
             liveSync: false,
           },
         );
@@ -420,6 +444,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
       const strategies = buildStrategies(channel.streamUrl, skippedStrategyUrlsRef.current);
       let lastError = "No playable stream source was found.";
+      const attemptErrors: string[] = [];
 
       for (const strategy of strategies) {
         if (cancelled) {
@@ -445,13 +470,14 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         } catch (attemptError) {
           skippedStrategyUrlsRef.current.add(strategy.url);
           lastError = attemptError instanceof Error ? attemptError.message : String(attemptError);
+          attemptErrors.push(lastError);
         }
       }
 
       if (!cancelled) {
         loadingRef.current = false;
         setLoading(false);
-        setError(lastError);
+        setError(attemptErrors.length > 0 ? attemptErrors.slice(-3).join(" | ") : lastError);
         setStatus("Playback failed");
       }
     }
@@ -500,7 +526,11 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
       lastCurrentTime = video.currentTime;
 
-      if (stalledTicks >= 3) {
+      if (stalledTicks === 3) {
+        recoverCurrentPlayback("waiting for more data");
+      }
+
+      if (stalledTicks >= 8) {
         stalledTicks = 0;
         scheduleRecovery("buffer stopped");
       }
@@ -509,7 +539,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     const onWaiting = () => {
       window.setTimeout(() => {
         if (!cancelled && video && !video.paused && video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
-          scheduleRecovery("waiting for data");
+          recoverCurrentPlayback("waiting for data");
         }
       }, 10000);
     };
