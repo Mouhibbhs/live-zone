@@ -1,6 +1,6 @@
 "use client";
 
-import { Tv2 } from "lucide-react";
+import { AlertTriangle, Radio, RefreshCw, Tv2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
 
@@ -195,6 +195,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
       await new Promise<void>((resolve, reject) => {
         let started = false;
+        let settled = false;
         const hls = new Hls({
           enableWorker: true,
           lowLatencyMode: false,
@@ -221,22 +222,38 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
         hlsRef.current = hls;
 
-        const timeoutId = window.setTimeout(() => {
-          reject(new Error(`${strategy.label} timed out.`));
-        }, 18000);
+        const settleSuccess = () => {
+          if (settled) {
+            return;
+          }
 
-        const onPlaying = () => {
+          settled = true;
           started = true;
           window.clearTimeout(timeoutId);
-          video.removeEventListener("playing", onPlaying);
+          video.removeEventListener("playing", settleSuccess);
+          video.removeEventListener("canplay", settleSuccess);
+          video.removeEventListener("loadeddata", settleSuccess);
           resolve();
         };
 
-        video.addEventListener("playing", onPlaying, { once: true });
+        const timeoutId = window.setTimeout(() => {
+          if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA || video.buffered.length > 0) {
+            settleSuccess();
+            return;
+          }
+
+          reject(new Error(`${strategy.label} timed out.`));
+        }, 18000);
+
+        video.addEventListener("playing", settleSuccess, { once: true });
+        video.addEventListener("canplay", settleSuccess, { once: true });
+        video.addEventListener("loadeddata", settleSuccess, { once: true });
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           void video.play().catch(() => undefined);
         });
+
+        hls.on(Hls.Events.FRAG_BUFFERED, settleSuccess);
 
         hls.on(Hls.Events.ERROR, (_event, data) => {
           if (data.fatal) {
@@ -258,7 +275,9 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
             }
 
             window.clearTimeout(timeoutId);
-            video.removeEventListener("playing", onPlaying);
+            video.removeEventListener("playing", settleSuccess);
+            video.removeEventListener("canplay", settleSuccess);
+            video.removeEventListener("loadeddata", settleSuccess);
             reject(new Error(`${strategy.label} failed: ${data.details}`));
           }
         });
@@ -284,6 +303,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
       await new Promise<void>((resolve, reject) => {
         let started = false;
+        let settled = false;
         const player = lib.createPlayer(
           {
             type: "mse",
@@ -302,18 +322,32 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
         mpegtsRef.current = player;
 
-        const timeoutId = window.setTimeout(() => {
-          reject(new Error(`${strategy.label} timed out.`));
-        }, 18000);
+        const settleSuccess = () => {
+          if (settled) {
+            return;
+          }
 
-        const onPlaying = () => {
+          settled = true;
           started = true;
           window.clearTimeout(timeoutId);
-          video.removeEventListener("playing", onPlaying);
+          video.removeEventListener("playing", settleSuccess);
+          video.removeEventListener("canplay", settleSuccess);
+          video.removeEventListener("loadeddata", settleSuccess);
           resolve();
         };
 
-        video.addEventListener("playing", onPlaying, { once: true });
+        const timeoutId = window.setTimeout(() => {
+          if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA || video.buffered.length > 0) {
+            settleSuccess();
+            return;
+          }
+
+          reject(new Error(`${strategy.label} timed out.`));
+        }, 18000);
+
+        video.addEventListener("playing", settleSuccess, { once: true });
+        video.addEventListener("canplay", settleSuccess, { once: true });
+        video.addEventListener("loadeddata", settleSuccess, { once: true });
 
         player.on(lib.Events.ERROR, (...args: unknown[]) => {
           const detail = typeof args[1] === "string" ? args[1] : "mpegts error";
@@ -323,7 +357,9 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           }
 
           window.clearTimeout(timeoutId);
-          video.removeEventListener("playing", onPlaying);
+          video.removeEventListener("playing", settleSuccess);
+          video.removeEventListener("canplay", settleSuccess);
+          video.removeEventListener("loadeddata", settleSuccess);
           reject(new Error(`${strategy.label} failed: ${detail}`));
         });
 
@@ -472,91 +508,99 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   }
 
   return (
-    <div className="hls-player">
-      <div className="player-container">
+    <div className="player-shell livezone-player">
+      <div className="player-video-frame">
         <video ref={videoRef} className="player-video" autoPlay muted controls playsInline preload="metadata" />
+        <div className="player-live-banner">
+          <span className={`live-indicator ${error ? "status-error" : "status-live"}`}>
+            <span className="pulse" />
+            {error ? "Stream issue" : "Live channel"}
+          </span>
+        </div>
         {loading ? (
-          <div className="error-overlay">
-            <div className="error-content">
-              <h4>Loading stream</h4>
-              <p>{status}</p>
+          <div className="player-overlay">
+            <div className="player-overlay-card">
+              <RefreshCw className="spin" size={28} />
+              <div className="player-overlay-copy">
+                <strong>Preparing live stream</strong>
+                <p>{status}</p>
+              </div>
             </div>
           </div>
         ) : null}
         {error ? (
-          <div className="error-overlay">
-            <div className="error-content">
-              <h4>Stream Error</h4>
-              <p>{error}</p>
-              <p>{status}</p>
+          <div className="player-overlay">
+            <div className="player-overlay-card player-error-card">
+              <AlertTriangle size={30} />
+              <div className="player-overlay-copy">
+                <strong>Playback needs another attempt</strong>
+                <p>{error}</p>
+                <p>{status}</p>
+              </div>
+              <div className="player-error-actions">
+                <button className="primary-button" onClick={() => setPlaybackNonce((value) => value + 1)} type="button">
+                  <RefreshCw size={16} />
+                  Retry stream
+                </button>
+                <a className="secondary-button" href={channel.streamUrl} rel="noreferrer" target="_blank">
+                  Open source
+                </a>
+              </div>
             </div>
           </div>
         ) : null}
       </div>
 
-      <div className="player-info">
-        <div className="channel-title">{channel.name}</div>
-        <div className="player-stats">
-          <span>{status}</span>
+      <div className="player-footer">
+        <div className="player-current-info">
+          <p className="player-active-meta">Now playing</p>
+          <h3 className="player-active-title">{channel.name}</h3>
+          <p className="player-active-copy">{status}</p>
+        </div>
+        <div className="player-controls-hint">
+          <Radio size={16} />
+          Autoplay muted. Use controls for sound.
         </div>
       </div>
 
       <style jsx>{`
-        .hls-player {
-          width: 100%;
-          max-width: 100%;
-          background: #000;
-          border-radius: 12px;
-          overflow: hidden;
-          font-family: system-ui, sans-serif;
+        .livezone-player {
+          border-radius: var(--radius-xl);
         }
 
-        .player-container {
-          position: relative;
-          aspect-ratio: 16 / 9;
-          background: #000;
+        .player-error-card {
+          border-color: rgba(255, 107, 95, 0.26);
+          background:
+            radial-gradient(circle at top, rgba(255, 107, 95, 0.12), transparent 42%),
+            rgba(7, 13, 21, 0.9);
         }
 
-        .player-video {
-          width: 100%;
-          height: 100%;
-          object-fit: contain;
+        .player-error-card :global(svg) {
+          color: var(--danger);
         }
 
-        .error-overlay {
-          position: absolute;
-          inset: 0;
-          background: rgba(0, 0, 0, 0.82);
+        .player-error-actions {
           display: flex;
-          align-items: center;
+          flex-wrap: wrap;
           justify-content: center;
-          color: white;
-          z-index: 10;
+          gap: 0.75rem;
         }
 
-        .error-content {
-          text-align: center;
-          padding: 2rem;
-          max-width: 32rem;
+        .player-controls-hint {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.55rem;
         }
 
-        .player-info {
-          padding: 1rem;
-          background: #1a1a1a;
-          color: white;
-        }
+        @media (max-width: 720px) {
+          .player-error-actions {
+            width: 100%;
+          }
 
-        .channel-title {
-          font-weight: bold;
-          margin: 0 0 0.5rem 0;
-          font-size: 1.1rem;
-        }
-
-        .player-stats {
-          display: flex;
-          gap: 1rem;
-          font-size: 0.85rem;
-          color: #aaa;
+          .player-error-actions :global(.primary-button),
+          .player-error-actions :global(.secondary-button) {
+            width: 100%;
+          }
         }
       `}</style>
     </div>
