@@ -71,7 +71,7 @@ function shouldTryDirectPlayback(): boolean {
 }
 
 function shouldTryContinuousMpegTs(): boolean {
-  return shouldTryDirectPlayback();
+  return true;
 }
 
 function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()): Strategy[] {
@@ -103,7 +103,7 @@ function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()
     strategies.push({ kind: "hls", label: "Direct HLS", url: directHls });
   }
 
-  if (shouldTryContinuousMpegTs() && directTs) {
+  if (shouldTryDirectPlayback() && shouldTryContinuousMpegTs() && directTs) {
     strategies.push({ kind: "mpegts", label: "Direct MPEG-TS", url: directTs });
   }
 
@@ -130,6 +130,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const hlsRef = useRef<Hls | null>(null);
   const mpegtsRef = useRef<MpegtsPlayer | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
+  const streamRefreshTimerRef = useRef<number | null>(null);
   const recoveryCountRef = useRef(0);
   const loadingRef = useRef(false);
   const currentStrategyRef = useRef<Strategy | null>(null);
@@ -158,12 +159,19 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       }
     }
 
-    function scheduleRecovery(reason: string) {
+    function clearStreamRefreshTimer() {
+      if (streamRefreshTimerRef.current) {
+        window.clearTimeout(streamRefreshTimerRef.current);
+        streamRefreshTimerRef.current = null;
+      }
+    }
+
+    function scheduleRecovery(reason: string, skipCurrentStrategy = true) {
       if (cancelled || reconnectTimerRef.current) {
         return;
       }
 
-      if (currentStrategyRef.current) {
+      if (skipCurrentStrategy && currentStrategyRef.current) {
         skippedStrategyUrlsRef.current.add(currentStrategyRef.current.url);
       }
 
@@ -189,6 +197,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
     function cleanup() {
       clearReconnectTimer();
+      clearStreamRefreshTimer();
 
       if (hlsRef.current) {
         hlsRef.current.destroy();
@@ -432,6 +441,12 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
             setLoading(false);
             setError(null);
             setStatus(`${strategy.label} connected`);
+
+            if (strategy.kind === "mpegts" && !shouldTryDirectPlayback()) {
+              streamRefreshTimerRef.current = window.setTimeout(() => {
+                scheduleRecovery("refreshing MPEG-TS connection", false);
+              }, 24000);
+            }
           }
           return;
         } catch (attemptError) {

@@ -18,23 +18,7 @@ function getProductionProxyBase(): string {
 }
 
 function normalizeConfiguredProxyBase(proxyUrl: string): string {
-  if (!proxyUrl.includes("/.netlify/functions/proxy")) {
-    return proxyUrl;
-  }
-
-  if (typeof window !== "undefined" && !isLocalHost(window.location.hostname)) {
-    return getProductionProxyBase();
-  }
-
-  try {
-    const parsed = new URL(proxyUrl);
-    parsed.pathname = "/api/proxy";
-    parsed.search = "";
-    parsed.hash = "";
-    return parsed.toString().replace(/\/$/, "");
-  } catch {
-    return proxyUrl;
-  }
+  return proxyUrl;
 }
 
 export function getIptvProxyBases(): string[] {
