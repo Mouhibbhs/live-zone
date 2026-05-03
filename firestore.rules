@@ -1,0 +1,166 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function currentUserPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function hasCurrentUserProfile() {
+      return signedIn() && exists(currentUserPath());
+    }
+
+    function currentUserData() {
+      return get(currentUserPath()).data;
+    }
+
+    function isAdmin() {
+      return hasCurrentUserProfile() && currentUserData().role == "admin";
+    }
+
+    function hasActiveSubscription() {
+      return hasCurrentUserProfile()
+        && currentUserData().active == true
+        && currentUserData().subscription_expiry != null
+        && currentUserData().subscription_expiry > request.time;
+    }
+
+    function canReadLiveData() {
+      return isAdmin() || hasActiveSubscription();
+    }
+
+    function validUsername(value) {
+      return value is string && value.size() >= 3 && value.size() <= 32;
+    }
+
+    function validDeviceId(value) {
+      return value == null || (value is string && value.size() > 0 && value.size() <= 160);
+    }
+
+    function validRole(value) {
+      return value == "viewer" || value == "admin";
+    }
+
+    function validTimestampOrNull(value) {
+      return value == null || value is timestamp;
+    }
+
+    function validFavoriteData() {
+      return request.resource.data.keys().hasOnly([
+        "id",
+        "name",
+        "categoryId",
+        "logo",
+        "streamUrl",
+        "epgChannelId",
+        "added_at",
+      ]);
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+
+      allow create: if (
+        isOwner(userId)
+        && request.resource.data.keys().hasOnly([
+          "uid",
+          "email",
+          "username",
+          "active",
+          "device_id",
+          "role",
+          "subscription_expiry",
+          "created_at",
+          "updated_at",
+        ])
+        && request.resource.data.uid == userId
+        && request.resource.data.email == request.auth.token.email
+        && validUsername(request.resource.data.username)
+        && request.resource.data.active == false
+        && request.resource.data.device_id == null
+        && request.resource.data.role == "viewer"
+        && request.resource.data.subscription_expiry == null
+      ) || (
+        isAdmin()
+        && request.resource.data.uid == userId
+        && request.resource.data.email is string
+        && validUsername(request.resource.data.username)
+        && request.resource.data.active is bool
+        && validDeviceId(request.resource.data.device_id)
+        && validRole(request.resource.data.role)
+        && validTimestampOrNull(request.resource.data.subscription_expiry)
+      );
+
+      allow update: if (
+        isOwner(userId)
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.active == resource.data.active
+        && request.resource.data.subscription_expiry == resource.data.subscription_expiry
+        && request.resource.data.created_at == resource.data.created_at
+        && validUsername(request.resource.data.username)
+        && (
+          request.resource.data.device_id == resource.data.device_id
+          || (resource.data.device_id == null && validDeviceId(request.resource.data.device_id))
+        )
+      ) || (
+        isAdmin()
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.created_at == resource.data.created_at
+        && request.resource.data.email is string
+        && validUsername(request.resource.data.username)
+        && request.resource.data.active is bool
+        && validDeviceId(request.resource.data.device_id)
+        && validRole(request.resource.data.role)
+        && validTimestampOrNull(request.resource.data.subscription_expiry)
+      );
+
+      allow delete: if false;
+
+      match /favorites/{channelId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create, update: if ((isOwner(userId) && canReadLiveData()) || isAdmin()) && validFavoriteData();
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+    }
+
+    match /live_categories/{categoryId} {
+      allow read: if canReadLiveData();
+      allow write: if false;
+    }
+
+    match /live_channels/{channelId} {
+      allow read: if canReadLiveData();
+      allow write: if false;
+    }
+
+    match /system/iptv_config {
+      allow read: if isAdmin();
+      allow write: if isAdmin()
+        && request.resource.data.keys().hasOnly([
+          "baseUrl",
+          "username",
+          "password",
+          "updatedAt",
+        ])
+        && request.resource.data.baseUrl is string
+        && request.resource.data.username is string
+        && request.resource.data.password is string
+        && request.resource.data.updatedAt is timestamp;
+    }
+
+    match /system/{documentId} {
+      allow read: if canReadLiveData();
+      allow write: if false;
+    }
+  }
+}

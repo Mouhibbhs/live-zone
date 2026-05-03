@@ -1,0 +1,18 @@
+[build]
+  command = "npm --prefix web ci && npm --prefix web run build"
+  publish = "web/out"
+  functions = "netlify/functions"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/player"
+  to = "/player/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/demo"
+  to = "/demo/index.html"
+  status = 200
