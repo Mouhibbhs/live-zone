@@ -37,22 +37,28 @@ function normalizeConfiguredProxyBase(proxyUrl: string): string {
   }
 }
 
-export function getIptvProxyBase(): string {
-  if (IPTV_PROXY_URL) {
-    return normalizeConfiguredProxyBase(IPTV_PROXY_URL);
-  }
-
+export function getIptvProxyBases(): string[] {
   if (typeof window === "undefined") {
-    return "";
+    return IPTV_PROXY_URL ? [normalizeConfiguredProxyBase(IPTV_PROXY_URL)] : [];
   }
 
   const host = window.location.hostname;
 
   if (isLocalHost(host)) {
-    return "http://localhost:8787/proxy";
+    return ["http://localhost:8787/proxy"];
   }
 
-  return getProductionProxyBase();
+  const bases = [
+    IPTV_PROXY_URL ? normalizeConfiguredProxyBase(IPTV_PROXY_URL) : "",
+    getProductionProxyBase(),
+    `${window.location.origin}/.netlify/functions/proxy`,
+  ];
+
+  return bases.filter((base, index, array) => base && array.indexOf(base) === index);
+}
+
+export function getIptvProxyBase(): string {
+  return getIptvProxyBases()[0] ?? "";
 }
 
 export function normalizeLiveStreamUrl(streamUrl: string, ext: "ts" | "m3u8" = "ts"): string {

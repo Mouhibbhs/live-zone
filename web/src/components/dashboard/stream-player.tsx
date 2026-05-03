@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
 
 import type { LiveChannel } from "@/lib/types";
-import { getIptvProxyBase } from "@/lib/stream-url";
+import { getIptvProxyBases } from "@/lib/stream-url";
 
 type MpegtsPlayer = {
   attachMediaElement(mediaElement: HTMLMediaElement): void;
@@ -57,30 +57,40 @@ function buildDirectUrl(streamUrl: string, ext: "m3u8" | "ts") {
   return `${match[1]}.${ext}${match[2] ?? ""}`;
 }
 
-function buildProxyUrl(url: string) {
-  const proxyBase = getIptvProxyBase();
+function buildProxyUrl(proxyBase: string, url: string) {
   return proxyBase ? `${proxyBase}?url=${encodeURIComponent(url)}` : "";
 }
 
 function buildStrategies(streamUrl: string): Strategy[] {
   const directHls = buildDirectUrl(streamUrl, "m3u8");
   const directTs = buildDirectUrl(streamUrl, "ts");
-  const proxyHls = buildProxyUrl(directHls);
-  const proxyTs = buildProxyUrl(directTs);
+  const proxyBases = getIptvProxyBases();
 
   const strategies: Strategy[] = [];
 
-  if (proxyHls) {
-    strategies.push({ kind: "hls", label: "Proxy HLS", url: proxyHls });
+  proxyBases.forEach((proxyBase, index) => {
+    strategies.push({
+      kind: "hls",
+      label: index === 0 ? "Proxy HLS" : `Proxy HLS fallback ${index}`,
+      url: buildProxyUrl(proxyBase, directHls),
+    });
+  });
+
+  proxyBases.forEach((proxyBase, index) => {
+    strategies.push({
+      kind: "mpegts",
+      label: index === 0 ? "Proxy MPEG-TS" : `Proxy MPEG-TS fallback ${index}`,
+      url: buildProxyUrl(proxyBase, directTs),
+    });
+  });
+
+  if (directHls) {
+    strategies.push({ kind: "hls", label: "Direct HLS", url: directHls });
   }
 
-  strategies.push({ kind: "hls", label: "Direct HLS", url: directHls });
-
-  if (proxyTs) {
-    strategies.push({ kind: "mpegts", label: "Proxy MPEG-TS", url: proxyTs });
+  if (directTs) {
+    strategies.push({ kind: "mpegts", label: "Direct MPEG-TS", url: directTs });
   }
-
-  strategies.push({ kind: "mpegts", label: "Direct MPEG-TS", url: directTs });
 
   return strategies.filter((item, index, array) => item.url && array.findIndex((entry) => entry.url === item.url) === index);
 }
@@ -102,6 +112,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const reconnectTimerRef = useRef<number | null>(null);
   const recoveryCountRef = useRef(0);
   const loadingRef = useRef(false);
+  const lastChannelKeyRef = useRef("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string>("Idle");
@@ -110,6 +121,12 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   useEffect(() => {
     let cancelled = false;
     const video = videoRef.current;
+    const channelKey = channel ? `${channel.id}:${channel.streamUrl}` : "";
+
+    if (channelKey !== lastChannelKeyRef.current) {
+      lastChannelKeyRef.current = channelKey;
+      recoveryCountRef.current = 0;
+    }
 
     function clearReconnectTimer() {
       if (reconnectTimerRef.current) {
@@ -206,7 +223,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
         const timeoutId = window.setTimeout(() => {
           reject(new Error(`${strategy.label} timed out.`));
-        }, 12000);
+        }, 18000);
 
         const onPlaying = () => {
           started = true;
@@ -287,7 +304,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
         const timeoutId = window.setTimeout(() => {
           reject(new Error(`${strategy.label} timed out.`));
-        }, 12000);
+        }, 18000);
 
         const onPlaying = () => {
           started = true;
@@ -350,7 +367,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
             setLoading(false);
             setError(null);
             setStatus(`${strategy.label} connected`);
-            recoveryCountRef.current = 0;
           }
           return;
         } catch (attemptError) {
@@ -441,7 +457,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       video.removeEventListener("error", onVideoError);
       cleanup();
     };
-  }, [channel, playbackNonce]);
+  }, [channel?.id, channel?.streamUrl, playbackNonce]);
 
   if (!channel) {
     return (
