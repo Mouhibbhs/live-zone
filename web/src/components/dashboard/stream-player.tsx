@@ -130,7 +130,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const hlsRef = useRef<Hls | null>(null);
   const mpegtsRef = useRef<MpegtsPlayer | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
-  const streamRefreshTimerRef = useRef<number | null>(null);
   const recoveryCountRef = useRef(0);
   const loadingRef = useRef(false);
   const currentStrategyRef = useRef<Strategy | null>(null);
@@ -156,13 +155,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       if (reconnectTimerRef.current) {
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
-      }
-    }
-
-    function clearStreamRefreshTimer() {
-      if (streamRefreshTimerRef.current) {
-        window.clearTimeout(streamRefreshTimerRef.current);
-        streamRefreshTimerRef.current = null;
       }
     }
 
@@ -195,33 +187,8 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       }, 1200);
     }
 
-    function scheduleSoftMpegtsRefresh(strategy: Strategy) {
-      clearStreamRefreshTimer();
-
-      if (shouldTryDirectPlayback()) {
-        return;
-      }
-
-      streamRefreshTimerRef.current = window.setTimeout(() => {
-        if (cancelled || currentStrategyRef.current?.url !== strategy.url || !mpegtsRef.current) {
-          return;
-        }
-
-        try {
-          mpegtsRef.current.unload();
-          mpegtsRef.current.load();
-          void mpegtsRef.current.play().catch(() => undefined);
-          setStatus(`${strategy.label} connected`);
-          scheduleSoftMpegtsRefresh(strategy);
-        } catch {
-          scheduleRecovery("refreshing MPEG-TS connection", false);
-        }
-      }, 22000);
-    }
-
     function cleanup() {
       clearReconnectTimer();
-      clearStreamRefreshTimer();
 
       if (hlsRef.current) {
         hlsRef.current.destroy();
@@ -373,10 +340,10 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           {
             enableWorker: true,
             enableStashBuffer: true,
-            stashInitialSize: 4096,
-            liveBufferLatencyChasing: true,
-            liveBufferLatencyMaxLatency: 30,
-            liveBufferLatencyMinLatency: 8,
+            stashInitialSize: 8192,
+            liveBufferLatencyChasing: false,
+            liveBufferLatencyMaxLatency: 45,
+            liveBufferLatencyMinLatency: 12,
           },
         );
 
@@ -465,10 +432,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
             setLoading(false);
             setError(null);
             setStatus(`${strategy.label} connected`);
-
-            if (strategy.kind === "mpegts") {
-              scheduleSoftMpegtsRefresh(strategy);
-            }
           }
           return;
         } catch (attemptError) {
