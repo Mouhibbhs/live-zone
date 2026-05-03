@@ -34,6 +34,12 @@ type Strategy = {
   url: string;
 };
 
+type XtreamAccountInfo = {
+  activeConnections: number | null;
+  maxConnections: number | null;
+  status: string | null;
+};
+
 const XTREAM_LIVE_STREAM_PATTERN =
   /^(https?:\/\/.+\/live\/[^/]+\/[^/]+\/[^/.?]+)(?:\.(?:m3u8|ts|m2ts|flv))?(\?.*)?$/i;
 
@@ -59,6 +65,21 @@ function buildDirectUrl(streamUrl: string, ext: "m3u8" | "ts") {
 
 function buildProxyUrl(proxyBase: string, url: string) {
   return proxyBase ? `${proxyBase}?url=${encodeURIComponent(url)}` : "";
+}
+
+function getXtreamApiUrl(streamUrl: string) {
+  try {
+    const directUrl = new URL(unwrapProxyUrl(streamUrl.trim()));
+    const parts = directUrl.pathname.trim().split("/").filter(Boolean);
+
+    if (parts.length < 4 || parts[0] !== "live") {
+      return "";
+    }
+
+    return `${directUrl.origin}/player_api.php?username=${encodeURIComponent(parts[1])}&password=${encodeURIComponent(parts[2])}`;
+  } catch {
+    return "";
+  }
 }
 
 function shouldTryDirectPlayback(): boolean {
@@ -113,6 +134,42 @@ function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()
   const availableStrategies = uniqueStrategies.filter((strategy) => !skippedUrls.has(strategy.url));
 
   return availableStrategies.length > 0 ? availableStrategies : uniqueStrategies;
+}
+
+async function getXtreamAccountInfo(streamUrl: string): Promise<XtreamAccountInfo | null> {
+  const apiUrl = getXtreamApiUrl(streamUrl);
+  const proxyBase = getIptvProxyBases()[0];
+
+  if (!apiUrl || !proxyBase) {
+    return null;
+  }
+
+  const response = await fetch(buildProxyUrl(proxyBase, apiUrl), {
+    headers: {
+      Accept: "application/json",
+    },
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const payload = await response.json();
+  const userInfo = payload?.user_info;
+
+  if (!userInfo || typeof userInfo !== "object") {
+    return null;
+  }
+
+  const activeConnections = Number.parseInt(String(userInfo.active_cons ?? ""), 10);
+  const maxConnections = Number.parseInt(String(userInfo.max_connections ?? ""), 10);
+
+  return {
+    activeConnections: Number.isFinite(activeConnections) ? activeConnections : null,
+    maxConnections: Number.isFinite(maxConnections) ? maxConnections : null,
+    status: typeof userInfo.status === "string" ? userInfo.status : null,
+  };
 }
 
 async function loadMpegtsModule(): Promise<MpegtsModule | null> {
@@ -441,6 +498,32 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       video.muted = true;
       video.autoplay = true;
       video.playsInline = true;
+
+      const accountInfo = await getXtreamAccountInfo(channel.streamUrl).catch(() => null);
+
+      if (
+        accountInfo &&
+        accountInfo.maxConnections !== null &&
+        accountInfo.activeConnections !== null &&
+        accountInfo.maxConnections > 0 &&
+        accountInfo.activeConnections >= accountInfo.maxConnections
+      ) {
+        loadingRef.current = false;
+        setLoading(false);
+        setError(
+          `IPTV connection limit reached (${accountInfo.activeConnections}/${accountInfo.maxConnections}). Stop the stream on other devices or wait for the provider to release the previous session.`,
+        );
+        setStatus("Connection limit reached");
+        return;
+      }
+
+      if (accountInfo && accountInfo.status && accountInfo.status.toLowerCase() !== "active") {
+        loadingRef.current = false;
+        setLoading(false);
+        setError(`IPTV account status is ${accountInfo.status}.`);
+        setStatus("IPTV account unavailable");
+        return;
+      }
 
       const strategies = buildStrategies(channel.streamUrl, skippedStrategyUrlsRef.current);
       let lastError = "No playable stream source was found.";
