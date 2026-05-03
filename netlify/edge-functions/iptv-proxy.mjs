@@ -30,6 +30,10 @@ function rewritePlaylist(playlistText, targetUrl, requestUrl) {
         return line;
       }
 
+      if (trimmed === "#EXT-X-ENDLIST") {
+        return "";
+      }
+
       try {
         if (trimmed.startsWith("#")) {
           return line.replace(/URI="([^"]+)"/g, (_match, value) => `URI="${proxyUrl(value)}"`);

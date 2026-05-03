@@ -19,7 +19,7 @@ type MpegtsPlayer = {
 
 type MpegtsModule = {
   createPlayer(
-    dataSource: { type: string; url: string; isLive?: boolean },
+    dataSource: { type: string; url: string; isLive?: boolean; duration?: number },
     config?: Record<string, unknown>,
   ): MpegtsPlayer;
   isSupported(): boolean;
@@ -336,14 +336,22 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
             type: "mse",
             url: strategy.url,
             isLive: true,
+            duration: Infinity,
           },
           {
             enableWorker: true,
             enableStashBuffer: true,
+            isLive: true,
             stashInitialSize: 8192,
-            liveBufferLatencyChasing: false,
+            lazyLoad: false,
+            autoCleanupSourceBuffer: true,
+            autoCleanupMaxBackwardDuration: 45,
+            autoCleanupMinBackwardDuration: 15,
+            liveBufferLatencyChasing: true,
+            liveBufferLatencyChasingOnPaused: true,
             liveBufferLatencyMaxLatency: 45,
-            liveBufferLatencyMinLatency: 12,
+            liveBufferLatencyMinRemain: 12,
+            liveSync: false,
           },
         );
 
