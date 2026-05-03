@@ -61,7 +61,7 @@ function buildProxyUrl(proxyBase: string, url: string) {
   return proxyBase ? `${proxyBase}?url=${encodeURIComponent(url)}` : "";
 }
 
-function buildStrategies(streamUrl: string): Strategy[] {
+function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()): Strategy[] {
   const directHls = buildDirectUrl(streamUrl, "m3u8");
   const directTs = buildDirectUrl(streamUrl, "ts");
   const proxyBases = getIptvProxyBases();
@@ -92,7 +92,12 @@ function buildStrategies(streamUrl: string): Strategy[] {
     strategies.push({ kind: "mpegts", label: "Direct MPEG-TS", url: directTs });
   }
 
-  return strategies.filter((item, index, array) => item.url && array.findIndex((entry) => entry.url === item.url) === index);
+  const uniqueStrategies = strategies.filter(
+    (item, index, array) => item.url && array.findIndex((entry) => entry.url === item.url) === index,
+  );
+  const availableStrategies = uniqueStrategies.filter((strategy) => !skippedUrls.has(strategy.url));
+
+  return availableStrategies.length > 0 ? availableStrategies : uniqueStrategies;
 }
 
 async function loadMpegtsModule(): Promise<MpegtsModule | null> {
@@ -112,6 +117,8 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const reconnectTimerRef = useRef<number | null>(null);
   const recoveryCountRef = useRef(0);
   const loadingRef = useRef(false);
+  const currentStrategyRef = useRef<Strategy | null>(null);
+  const skippedStrategyUrlsRef = useRef<Set<string>>(new Set());
   const lastChannelKeyRef = useRef("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -126,6 +133,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     if (channelKey !== lastChannelKeyRef.current) {
       lastChannelKeyRef.current = channelKey;
       recoveryCountRef.current = 0;
+      skippedStrategyUrlsRef.current = new Set();
     }
 
     function clearReconnectTimer() {
@@ -140,7 +148,11 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         return;
       }
 
-      if (recoveryCountRef.current >= 5) {
+      if (currentStrategyRef.current) {
+        skippedStrategyUrlsRef.current.add(currentStrategyRef.current.url);
+      }
+
+      if (recoveryCountRef.current >= 8) {
         loadingRef.current = false;
         setLoading(false);
         setError(`Stream stopped after multiple reconnects: ${reason}`);
@@ -152,7 +164,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       loadingRef.current = true;
       setLoading(true);
       setError(null);
-      setStatus(`Reconnecting stream (${recoveryCountRef.current}/5): ${reason}`);
+      setStatus(`Trying another stream route (${recoveryCountRef.current}/8): ${reason}`);
 
       reconnectTimerRef.current = window.setTimeout(() => {
         reconnectTimerRef.current = null;
@@ -383,7 +395,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       video.autoplay = true;
       video.playsInline = true;
 
-      const strategies = buildStrategies(channel.streamUrl);
+      const strategies = buildStrategies(channel.streamUrl, skippedStrategyUrlsRef.current);
       let lastError = "No playable stream source was found.";
 
       for (const strategy of strategies) {
@@ -392,6 +404,8 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         }
 
         try {
+          currentStrategyRef.current = strategy;
+
           if (strategy.kind === "hls") {
             await tryHls(strategy);
           } else {
@@ -406,6 +420,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           }
           return;
         } catch (attemptError) {
+          skippedStrategyUrlsRef.current.add(strategy.url);
           lastError = attemptError instanceof Error ? attemptError.message : String(attemptError);
         }
       }

@@ -14,19 +14,26 @@ function getProxyEndpoint(requestUrl) {
 function rewritePlaylist(playlistText, targetUrl, requestUrl) {
   const proxyEndpoint = getProxyEndpoint(requestUrl);
   const target = new URL(targetUrl);
+  const proxyUrl = (value) => {
+    const resolved = new URL(value, target).toString();
+    return `${proxyEndpoint}?url=${encodeURIComponent(resolved)}`;
+  };
 
   return playlistText
     .split(/\r?\n/)
     .map((line) => {
       const trimmed = line.trim();
 
-      if (!trimmed || trimmed.startsWith("#")) {
+      if (!trimmed) {
         return line;
       }
 
       try {
-        const resolved = new URL(trimmed, target).toString();
-        return `${proxyEndpoint}?url=${encodeURIComponent(resolved)}`;
+        if (trimmed.startsWith("#")) {
+          return line.replace(/URI="([^"]+)"/g, (_match, value) => `URI="${proxyUrl(value)}"`);
+        }
+
+        return proxyUrl(trimmed);
       } catch {
         return line;
       }
