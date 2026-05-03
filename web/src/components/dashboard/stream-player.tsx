@@ -70,6 +70,10 @@ function shouldTryDirectPlayback(): boolean {
   return host === "localhost" || host === "127.0.0.1";
 }
 
+function shouldTryContinuousMpegTs(): boolean {
+  return shouldTryDirectPlayback();
+}
+
 function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()): Strategy[] {
   const directHls = buildDirectUrl(streamUrl, "m3u8");
   const directTs = buildDirectUrl(streamUrl, "ts");
@@ -85,19 +89,21 @@ function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()
     });
   });
 
-  proxyBases.forEach((proxyBase, index) => {
-    strategies.push({
-      kind: "mpegts",
-      label: index === 0 ? "Proxy MPEG-TS" : `Proxy MPEG-TS fallback ${index}`,
-      url: buildProxyUrl(proxyBase, directTs),
+  if (shouldTryContinuousMpegTs()) {
+    proxyBases.forEach((proxyBase, index) => {
+      strategies.push({
+        kind: "mpegts",
+        label: index === 0 ? "Proxy MPEG-TS" : `Proxy MPEG-TS fallback ${index}`,
+        url: buildProxyUrl(proxyBase, directTs),
+      });
     });
-  });
+  }
 
   if (shouldTryDirectPlayback() && directHls) {
     strategies.push({ kind: "hls", label: "Direct HLS", url: directHls });
   }
 
-  if (shouldTryDirectPlayback() && directTs) {
+  if (shouldTryContinuousMpegTs() && directTs) {
     strategies.push({ kind: "mpegts", label: "Direct MPEG-TS", url: directTs });
   }
 
