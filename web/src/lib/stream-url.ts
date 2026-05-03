@@ -21,6 +21,10 @@ function normalizeConfiguredProxyBase(proxyUrl: string): string {
   return proxyUrl;
 }
 
+export function hasConfiguredIptvProxy(): boolean {
+  return Boolean(IPTV_PROXY_URL);
+}
+
 export function getIptvProxyBases(): string[] {
   if (typeof window === "undefined") {
     return IPTV_PROXY_URL ? [normalizeConfiguredProxyBase(IPTV_PROXY_URL)] : [];
