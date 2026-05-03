@@ -111,13 +111,35 @@ NEXT_PUBLIC_FIREBASE_APP_ID=...
 Optional override:
 
 ```text
-NEXT_PUBLIC_IPTV_PROXY_URL=https://your-site.netlify.app/api/proxy
+NEXT_PUBLIC_IPTV_PROXY_URL=https://your-stream-proxy.example.com/proxy
 ```
 
 If you do not set `NEXT_PUBLIC_IPTV_PROXY_URL`, the app will automatically use:
 
 - `http://localhost:8787/proxy` on local development
 - `/api/proxy` on non-local hosts
+
+For the smoothest production playback, do not use Netlify Functions or Edge Functions as the IPTV proxy. Deploy the long-running proxy in `stream-proxy/` to Render, Railway, or a VPS, then set `NEXT_PUBLIC_IPTV_PROXY_URL` to that service's `/proxy` URL.
+
+### Production stream proxy
+
+The `stream-proxy/` folder is a standalone Node service for live IPTV streaming. It avoids serverless request timeouts by piping the stream continuously.
+
+Render/Railway settings:
+
+```text
+Root directory: stream-proxy
+Build command: npm install
+Start command: npm start
+```
+
+After deployment, set this variable in Netlify:
+
+```text
+NEXT_PUBLIC_IPTV_PROXY_URL=https://your-proxy-domain.com/proxy
+```
+
+Then redeploy the Netlify site.
 
 ### Important limitation
 

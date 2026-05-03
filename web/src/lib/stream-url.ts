@@ -32,8 +32,11 @@ export function getIptvProxyBases(): string[] {
     return ["http://localhost:8787/proxy"];
   }
 
+  if (IPTV_PROXY_URL) {
+    return [normalizeConfiguredProxyBase(IPTV_PROXY_URL)];
+  }
+
   const bases = [
-    IPTV_PROXY_URL ? normalizeConfiguredProxyBase(IPTV_PROXY_URL) : "",
     `${window.location.origin}/.netlify/functions/proxy`,
     getProductionProxyBase(),
   ];
