@@ -263,11 +263,19 @@ async function waitForSignedInUser(uid: string): Promise<void> {
 
 function shouldFallbackToClientRegistration(error: unknown) {
   if (typeof error === "object" && error !== null && "code" in error && typeof error.code === "string") {
-    return error.code === "functions/not-found" || error.code === "functions/unavailable";
+    return (
+      error.code === "functions/not-found" ||
+      error.code === "functions/unavailable" ||
+      error.code === "functions/unimplemented" ||
+      error.code === "functions/internal"
+    );
   }
 
   return error instanceof Error
-    ? error.message.includes("functions/not-found") || error.message.includes("functions/unavailable")
+    ? error.message.includes("functions/not-found") ||
+        error.message.includes("functions/unavailable") ||
+        error.message.includes("functions/unimplemented") ||
+        error.message.includes("functions/internal")
     : false;
 }
 
@@ -785,4 +793,3 @@ export async function adminUpdateIptvEnv(): Promise<{ success: boolean; message?
     throw new Error(getCallableErrorMessage(error, "Unable to sync IPTV environment."));
   }
 }
-
