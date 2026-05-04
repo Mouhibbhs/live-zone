@@ -34,6 +34,31 @@ export function getFinalUrl(url: string): string {
   return url;
 }
 
+function unwrapProxyUrl(streamUrl: string): string {
+  try {
+    const parsed = new URL(streamUrl);
+    return parsed.searchParams.get("url") || streamUrl;
+  } catch {
+    return streamUrl;
+  }
+}
+
+export function buildXtreamDirectUrl(streamUrl: string, ext: "m3u8" | "ts"): string {
+  const trimmed = unwrapProxyUrl(streamUrl.trim());
+  const match = trimmed.match(XTREAM_LIVE_STREAM_PATTERN);
+
+  if (!match) {
+    return trimmed;
+  }
+
+  return `${match[1]}.${ext}${match[2] ?? ""}`;
+}
+
+export function getClapprSourceUrl(streamUrl: string): string {
+  const directHls = buildXtreamDirectUrl(streamUrl, "m3u8");
+  return getFinalUrl(directHls);
+}
+
 export function getIptvProxyBases(): string[] {
   if (typeof window === "undefined") {
     return IPTV_PROXY_URL ? [normalizeConfiguredProxyBase(IPTV_PROXY_URL)] : [];

@@ -3,7 +3,7 @@
 import { LoaderCircle, Radio, RotateCw, Tv2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { getFinalUrl } from "@/lib/stream-url";
+import { getClapprSourceUrl } from "@/lib/stream-url";
 import type { LiveChannel } from "@/lib/types";
 
 type ClapprEvents = {
@@ -34,7 +34,7 @@ const RETRY_LIMIT = 5;
 const RETRY_DELAY_MS = 1800;
 
 function getPlayerSource(streamUrl: string): string {
-  return getFinalUrl(streamUrl.trim());
+  return getClapprSourceUrl(streamUrl.trim());
 }
 
 export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
@@ -121,8 +121,12 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       const source = getPlayerSource(channel.streamUrl);
 
       try {
-        const clapprImport = await import("clappr");
+        const [clapprImport, hlsjsPlaybackImport] = await Promise.all([
+          import("@clappr/player"),
+          import("@clappr/hlsjs-playback"),
+        ]);
         const Clappr = (clapprImport.default ?? clapprImport) as unknown as ClapprModule;
+        const HlsjsPlayback = (hlsjsPlaybackImport.default ?? hlsjsPlaybackImport) as unknown;
 
         if (disposed || !playerHostRef.current) {
           return;
@@ -138,13 +142,17 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           crossOrigin: "anonymous",
           disableErrorScreen: true,
           playbackNotSupportedMessage: "",
+          plugins: [HlsjsPlayback],
           mediacontrol: {
             seekbar: "#25b0ff",
             buttons: "#25b0ff",
           },
-          hlsjsConfig: {
-            maxBufferLength: 30,
-            liveSyncDurationCount: 7,
+          playback: {
+            crossOrigin: "anonymous",
+            hlsjsConfig: {
+              maxBufferLength: 30,
+              liveSyncDurationCount: 7,
+            },
           },
         });
 
