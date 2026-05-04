@@ -1,7 +1,7 @@
 export const HLS_MIME_TYPE = "application/vnd.apple.mpegurl";
 
 const IPTV_PROXY_URL = process.env.NEXT_PUBLIC_IPTV_PROXY_URL?.trim().replace(/\/$/, "") || "";
-const LIVEZONE_PROXY_BASE = "https://live-zone.onrender.com";
+const LIVEZONE_PROXY_BASE = "https://live-zone.onrender.com/proxy";
 
 const XTREAM_LIVE_STREAM_PATTERN =
   /^(https?:\/\/.+\/live\/[^/]+\/[^/]+\/[^/.?]+)(?:\.(?:m3u8|ts|m2ts|flv))?(\?.*)?$/i;
@@ -23,7 +23,7 @@ function normalizeConfiguredProxyBase(proxyUrl: string): string {
 }
 
 export function proxy(url: string): string {
-  return `${LIVEZONE_PROXY_BASE}/?url=${encodeURIComponent(url)}`;
+  return `${LIVEZONE_PROXY_BASE}?url=${encodeURIComponent(url)}`;
 }
 
 export function getFinalUrl(url: string): string {
@@ -59,9 +59,22 @@ export function getClapprSourceUrl(streamUrl: string): string {
   return getFinalUrl(directHls);
 }
 
+export function getClapprSourceCandidates(streamUrl: string): string[] {
+  const directHls = buildXtreamDirectUrl(streamUrl, "m3u8");
+  const proxiedSources = getIptvProxyBases().map(
+    (proxyBase) => `${proxyBase}?url=${encodeURIComponent(directHls)}`,
+  );
+  const directSources =
+    typeof window !== "undefined" && isLocalHost(window.location.hostname) ? [directHls] : [];
+
+  return [...proxiedSources, ...directSources].filter(
+    (value, index, items) => value && items.indexOf(value) === index,
+  );
+}
+
 export function getIptvProxyBases(): string[] {
   if (typeof window === "undefined") {
-    return IPTV_PROXY_URL ? [normalizeConfiguredProxyBase(IPTV_PROXY_URL)] : [];
+    return [LIVEZONE_PROXY_BASE, IPTV_PROXY_URL ? normalizeConfiguredProxyBase(IPTV_PROXY_URL) : ""].filter(Boolean);
   }
 
   const host = window.location.hostname;
@@ -71,6 +84,7 @@ export function getIptvProxyBases(): string[] {
   }
 
   const bases = [
+    LIVEZONE_PROXY_BASE,
     IPTV_PROXY_URL ? normalizeConfiguredProxyBase(IPTV_PROXY_URL) : "",
     `${window.location.origin}/.netlify/functions/proxy`,
     getProductionProxyBase(),

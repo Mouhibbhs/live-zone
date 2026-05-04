@@ -1,9 +1,9 @@
 "use client";
 
-import { LoaderCircle, Radio, RotateCw, Tv2 } from "lucide-react";
+import { Radio, Tv2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { getClapprSourceUrl } from "@/lib/stream-url";
+import { getClapprSourceCandidates } from "@/lib/stream-url";
 import type { LiveChannel } from "@/lib/types";
 
 type ClapprEvents = {
@@ -30,19 +30,33 @@ type ClapprPlayer = {
   stop(): void;
 };
 
+type HlsErrorLike = {
+  details?: string;
+  fatal?: boolean;
+  type?: string;
+};
+
 const RETRY_LIMIT = 5;
 const RETRY_DELAY_MS = 1800;
+const LOAD_TIMEOUT_MS = 20000;
+const BUFFER_RECOVERY_MS = 30000;
+const HLS_ERROR_EVENT = "hlsError";
+const HLS_FRAG_BUFFERED_EVENT = "hlsFragBuffered";
 
-function getPlayerSource(streamUrl: string): string {
-  return getClapprSourceUrl(streamUrl.trim());
+function getPlayerSources(streamUrl: string): string[] {
+  return getClapprSourceCandidates(streamUrl.trim());
 }
 
 export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const playerHostRef = useRef<HTMLDivElement | null>(null);
   const playerRef = useRef<ClapprPlayer | null>(null);
   const retryTimerRef = useRef<number | null>(null);
+  const loadTimeoutRef = useRef<number | null>(null);
+  const bufferRecoveryTimerRef = useRef<number | null>(null);
   const retryCountRef = useRef(0);
   const channelKeyRef = useRef("");
+  const sourceIndexRef = useRef(0);
+  const hasStartedRef = useRef(false);
   const [status, setStatus] = useState("Idle");
   const [isLoading, setIsLoading] = useState(false);
   const [retryNonce, setRetryNonce] = useState(0);
@@ -52,6 +66,8 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     if (channelKey !== channelKeyRef.current) {
       channelKeyRef.current = channelKey;
       retryCountRef.current = 0;
+      sourceIndexRef.current = 0;
+      hasStartedRef.current = false;
     }
   }, [channel?.id, channel?.streamUrl]);
 
@@ -65,8 +81,24 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       }
     }
 
+    function clearLoadTimeout() {
+      if (loadTimeoutRef.current !== null) {
+        window.clearTimeout(loadTimeoutRef.current);
+        loadTimeoutRef.current = null;
+      }
+    }
+
+    function clearBufferRecoveryTimer() {
+      if (bufferRecoveryTimerRef.current !== null) {
+        window.clearTimeout(bufferRecoveryTimerRef.current);
+        bufferRecoveryTimerRef.current = null;
+      }
+    }
+
     function destroyPlayer() {
       clearRetryTimer();
+      clearLoadTimeout();
+      clearBufferRecoveryTimer();
 
       if (playerRef.current) {
         try {
@@ -85,9 +117,23 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       }
     }
 
-    function scheduleRetry(reason: string) {
+    function scheduleRetry(sourceCount: number, rotateSource = true) {
       if (disposed || retryTimerRef.current !== null) {
         return;
+      }
+
+      clearBufferRecoveryTimer();
+
+      if (rotateSource) {
+        const nextSourceIndex = sourceIndexRef.current + 1;
+        if (nextSourceIndex < sourceCount) {
+          sourceIndexRef.current = nextSourceIndex;
+        } else {
+          sourceIndexRef.current = 0;
+          retryCountRef.current += 1;
+        }
+      } else {
+        retryCountRef.current += 1;
       }
 
       if (retryCountRef.current >= RETRY_LIMIT) {
@@ -96,14 +142,27 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         return;
       }
 
-      retryCountRef.current += 1;
       setIsLoading(true);
       setStatus(`Reconnecting stream`);
 
       retryTimerRef.current = window.setTimeout(() => {
         retryTimerRef.current = null;
+        hasStartedRef.current = false;
         setRetryNonce((value) => value + 1);
       }, RETRY_DELAY_MS);
+    }
+
+    function scheduleBufferRecovery(sourceCount: number) {
+      if (disposed || bufferRecoveryTimerRef.current !== null) {
+        return;
+      }
+
+      setStatus("Buffering");
+
+      bufferRecoveryTimerRef.current = window.setTimeout(() => {
+        bufferRecoveryTimerRef.current = null;
+        scheduleRetry(sourceCount, false);
+      }, BUFFER_RECOVERY_MS);
     }
 
     async function mountPlayer() {
@@ -117,8 +176,16 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       destroyPlayer();
       setIsLoading(true);
       setStatus("Loading live stream");
+      hasStartedRef.current = false;
 
-      const source = getPlayerSource(channel.streamUrl);
+      const sources = getPlayerSources(channel.streamUrl);
+      const source = sources[sourceIndexRef.current] || sources[0];
+
+      if (!source) {
+        setIsLoading(false);
+        setStatus("Playback unavailable");
+        return;
+      }
 
       try {
         const [clapprImport, hlsjsPlaybackImport] = await Promise.all([
@@ -134,7 +201,8 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
         const player = new Clappr.Player({
           source,
-          parent: playerHostRef.current,
+          mimeType: "application/vnd.apple.mpegurl",
+          parentId: "#player",
           width: "100%",
           height: "100%",
           autoPlay: true,
@@ -143,6 +211,40 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           disableErrorScreen: true,
           playbackNotSupportedMessage: "",
           plugins: [HlsjsPlayback],
+          hlsRecoverAttempts: 50,
+          hlsPlayback: {
+            preload: true,
+            customListeners: [
+              {
+                eventName: HLS_FRAG_BUFFERED_EVENT,
+                callback: () => {
+                  clearLoadTimeout();
+                  clearBufferRecoveryTimer();
+                  hasStartedRef.current = true;
+                  retryCountRef.current = 0;
+                  setStatus("Playing");
+                  setIsLoading(false);
+                },
+              },
+              {
+                eventName: HLS_ERROR_EVENT,
+                callback: (_event: string, data: HlsErrorLike) => {
+                  if (disposed) {
+                    return;
+                  }
+
+                  if (hasStartedRef.current) {
+                    scheduleBufferRecovery(sources.length);
+                    return;
+                  }
+
+                  if (data?.fatal) {
+                    scheduleRetry(sources.length);
+                  }
+                },
+              },
+            ],
+          },
           mediacontrol: {
             seekbar: "#25b0ff",
             buttons: "#25b0ff",
@@ -150,8 +252,32 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           playback: {
             crossOrigin: "anonymous",
             hlsjsConfig: {
-              maxBufferLength: 30,
+              enableWorker: true,
+              lowLatencyMode: false,
+              liveDurationInfinity: true,
+              maxBufferLength: 120,
+              maxMaxBufferLength: 240,
+              backBufferLength: 90,
               liveSyncDurationCount: 7,
+              liveMaxLatencyDurationCount: 14,
+              maxLiveSyncPlaybackRate: 1.1,
+              maxBufferHole: 1.5,
+              nudgeOffset: 0.2,
+              nudgeMaxRetry: 8,
+              highBufferWatchdogPeriod: 3,
+              startFragPrefetch: true,
+              manifestLoadingTimeOut: 20000,
+              manifestLoadingMaxRetry: 20,
+              manifestLoadingRetryDelay: 1000,
+              manifestLoadingMaxRetryTimeout: 15000,
+              levelLoadingTimeOut: 20000,
+              levelLoadingMaxRetry: 20,
+              levelLoadingRetryDelay: 1000,
+              levelLoadingMaxRetryTimeout: 15000,
+              fragLoadingTimeOut: 20000,
+              fragLoadingMaxRetry: 20,
+              fragLoadingRetryDelay: 1000,
+              fragLoadingMaxRetryTimeout: 15000,
             },
           },
         });
@@ -166,28 +292,45 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         const errorEvent = events.PLAYER_ERROR ?? events.CORE_ERROR ?? "error";
 
         const handleReady = () => {
+          clearLoadTimeout();
+          clearBufferRecoveryTimer();
+          hasStartedRef.current = true;
           setStatus("Live");
           setIsLoading(false);
           retryCountRef.current = 0;
         };
 
         const handlePlay = () => {
+          clearLoadTimeout();
+          clearBufferRecoveryTimer();
+          hasStartedRef.current = true;
           setStatus("Playing");
           setIsLoading(false);
         };
 
         const handleBuffering = () => {
+          if (!hasStartedRef.current) {
+            setIsLoading(true);
+          }
           setStatus("Buffering");
-          setIsLoading(true);
+          scheduleBufferRecovery(sources.length);
         };
 
         const handleBufferFull = () => {
+          clearLoadTimeout();
+          clearBufferRecoveryTimer();
+          hasStartedRef.current = true;
           setStatus("Playing");
           setIsLoading(false);
         };
 
         const handleError = (..._args: unknown[]) => {
-          scheduleRetry("player error");
+          if (hasStartedRef.current) {
+            scheduleBufferRecovery(sources.length);
+            return;
+          }
+
+          scheduleRetry(sources.length);
         };
 
         player.on(readyEvent, handleReady);
@@ -195,8 +338,12 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         player.on(bufferingEvent, handleBuffering);
         player.on(bufferFullEvent, handleBufferFull);
         player.on(errorEvent, handleError);
+
+        loadTimeoutRef.current = window.setTimeout(() => {
+          scheduleRetry(sources.length);
+        }, LOAD_TIMEOUT_MS);
       } catch {
-        scheduleRetry("player bootstrap failed");
+        scheduleRetry(sources.length);
       }
     }
 
@@ -228,13 +375,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     <div className="player-shell livezone-player">
       <div className="player-video-frame">
         <div id="player" ref={playerHostRef} className="player-clappr-host" />
-
-        {isLoading ? (
-          <div className="player-loading-overlay" aria-live="polite">
-            <LoaderCircle className="player-loading-spinner" size={18} />
-            <span>{status}</span>
-          </div>
-        ) : null}
       </div>
 
       <div className="player-footer">
@@ -244,8 +384,8 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           <p className="player-active-copy">{status}</p>
         </div>
         <div className="player-controls-hint">
-          {isLoading ? <RotateCw size={16} /> : <Radio size={16} />}
-          {isLoading ? "Recovering stream route." : "Autoplay enabled. Use controls for sound."}
+          <Radio size={16} />
+          Autoplay enabled. Use controls for sound.
         </div>
       </div>
     </div>
