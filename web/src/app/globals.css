@@ -31,6 +31,7 @@
 
 body,html {
     min-height: 100%;
+    width: 100%;
     margin: 0;
     background: radial-gradient(circle at top left,rgba(37,176,255,.18),transparent 30%),radial-gradient(circle at top right,rgba(255,107,95,.12),transparent 22%),linear-gradient(180deg,#08131d,#050b11 45%,#04080d);
     color: var(--text)
@@ -56,6 +57,7 @@ img {
 }
 
 button,input {
+    max-width: 100%;
     font: inherit
 }
 
@@ -133,12 +135,12 @@ a {
 .brand-copy h1 {
     margin: .45rem 0 1rem;
     font-family: Bahnschrift,Trebuchet MS,sans-serif;
-    font-size: clamp(3.2rem,7vw,5.8rem);
+    font-size: 5rem;
     line-height: .9;
     letter-spacing: -.04em
 }
 
-.brand-copy p,.favorite-row-meta,.muted-copy,.player-active-copy,.player-empty-state p,.player-overlay-copy p {
+.brand-copy p,.favorite-row-meta,.muted-copy,.player-active-copy,.player-empty-state p {
     color: var(--text-muted)
 }
 
@@ -164,7 +166,8 @@ a {
 .auth-switch,.inline-form,.selected-channel-actions,.toggle-row,.topbar-actions,.viewer-toolbar-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: .75rem
+    gap: .75rem;
+    min-width: 0
 }
 
 .danger-button,.favorite-row,.icon-button,.primary-button,.secondary-button,.segment {
@@ -178,8 +181,10 @@ a {
     align-items: center;
     justify-content: center;
     gap: .55rem;
+    min-width: 0;
     min-height: 46px;
-    padding: .8rem 1.1rem
+    padding: .8rem 1.1rem;
+    text-align: center
 }
 
 .favorite-row,.icon-button,.secondary-button,.segment {
@@ -188,7 +193,7 @@ a {
     color: var(--text)
 }
 
-.channel-list-row.active,.favorite-row.active,.live-indicator.status-live,.mini-stat-card strong,.secondary-button.active,.segment.active {
+.channel-list-row.active,.favorite-row.active,.mini-stat-card strong,.secondary-button.active,.segment.active {
     border-color: rgba(37,176,255,.38)
 }
 
@@ -220,7 +225,7 @@ a {
     justify-content: center
 }
 
-.drawer-meta-row,.eyebrow,.field span,.group-label,.live-indicator,.player-active-meta {
+.drawer-meta-row,.eyebrow,.field span,.group-label,.player-active-meta {
     text-transform: uppercase;
     letter-spacing: .14em;
     font-size: .72rem;
@@ -319,8 +324,9 @@ a {
     display: block;
     margin-top: .2rem;
     font-family: Bahnschrift,Trebuchet MS,sans-serif;
-    font-size: clamp(1.05rem,1.5vw,1.45rem);
-    letter-spacing: -.02em
+    font-size: 1.25rem;
+    letter-spacing: -.02em;
+    overflow-wrap: anywhere
 }
 
 .topbar-brand img {
@@ -411,7 +417,8 @@ a {
 }
 
 .viewer-toolbar-copy {
-    max-width: 760px
+    max-width: 760px;
+    min-width: 0
 }
 
 .blocked-panel h2,.panel-header h2,.panel-header h3,.viewer-toolbar-copy h2 {
@@ -421,7 +428,8 @@ a {
 
 .viewer-toolbar-copy h2 {
     font-family: Bahnschrift,Trebuchet MS,sans-serif;
-    font-size: clamp(1.6rem,2vw,2.1rem)
+    font-size: 2rem;
+    overflow-wrap: anywhere
 }
 
 .viewer-toolbar-copy p:last-child {
@@ -468,12 +476,12 @@ a {
     justify-content: center
 }
 
-.player-empty-state strong,.player-overlay-copy strong,.selected-channel-copy strong {
+.player-empty-state strong,.selected-channel-copy strong {
     display: block;
     font-size: 1.02rem
 }
 
-.drawer-meta-row,.favorite-row-meta,.player-active-copy,.player-empty-state p,.player-overlay-copy p,.selected-channel-copy p {
+.drawer-meta-row,.favorite-row-meta,.player-active-copy,.player-empty-state p,.selected-channel-copy p {
     margin: .25rem 0 0
 }
 
@@ -699,7 +707,7 @@ a {
     position: relative;
     width: 100%;
     aspect-ratio: 16/9;
-    min-height: 360px;
+    min-height: clamp(240px,34vw,360px);
     overflow: hidden;
     background: radial-gradient(circle at center,rgba(16,35,58,.34),transparent 58%),#01060c
 }
@@ -723,45 +731,7 @@ a {
     object-fit: contain
 }
 
-.player-live-banner {
-    position: absolute;
-    top: 1rem;
-    left: 1rem;
-    z-index: 3;
-    max-width: calc(100% - 2rem);
-    padding: .75rem 1rem;
-    border-radius: 999px;
-    border: 1px solid rgba(127,194,255,.16);
-    background: rgba(7,13,20,.8);
-    -webkit-backdrop-filter: blur(16px);
-    backdrop-filter: blur(16px)
-}
-
-.player-overlay {
-    position: absolute;
-    inset: 0;
-    z-index: 4;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 1.25rem;
-    background: linear-gradient(180deg,rgba(2,5,10,.34),rgba(2,5,10,.78))
-}
-
-.player-overlay-card {
-    width: min(100%,400px);
-    flex-direction: column;
-    padding: 1.5rem;
-    border-radius: 26px;
-    border: 1px solid rgba(127,194,255,.2);
-    background: rgba(7,13,21,.84);
-    -webkit-backdrop-filter: blur(20px);
-    backdrop-filter: blur(20px);
-    text-align: center;
-    box-shadow: var(--shadow-xl)
-}
-
-.player-footer,.player-overlay-card {
+.player-footer {
     display: flex;
     align-items: center;
     gap: 1rem
@@ -781,37 +751,10 @@ a {
     min-width: 0
 }
 
-.live-indicator {
-    display: inline-flex;
-    align-items: center;
-    gap: .5rem;
-    font-weight: 800
-}
-
-.live-indicator.status-live {
-    color: #9cf2ca
-}
-
-.live-indicator.status-error {
-    color: #ffb2ab
-}
-
-.live-indicator.status-action-required {
-    color: #ffe6aa
-}
-
-.pulse {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: currentColor;
-    animation: pulse-animation 2s infinite
-}
-
 .player-active-title {
     margin: 0;
     font-family: Bahnschrift,Trebuchet MS,sans-serif;
-    font-size: clamp(1.2rem,2vw,1.45rem);
+    font-size: 1.35rem;
     line-height: 1.15;
     white-space: nowrap;
     overflow: hidden;
@@ -915,35 +858,38 @@ a {
     overflow-wrap: anywhere
 }
 
-.spin {
-    animation: spin .9s linear infinite
+.standalone-page {
+    width: min(100%,1400px);
+    margin: 0 auto;
+    padding: 2rem
 }
 
-@keyframes spin {
-    0% {
-        transform: rotate(0deg)
-    }
-
-    to {
-        transform: rotate(1turn)
-    }
+.standalone-page-narrow {
+    max-width: 800px;
+    text-align: center
 }
 
-@keyframes pulse-animation {
-    0% {
-        transform: scale(.95);
-        opacity: 1
-    }
+.standalone-page h1 {
+    margin: 0 0 2rem;
+    color: white;
+    font-size: 2rem;
+    line-height: 1.15;
+    overflow-wrap: anywhere
+}
 
-    70% {
-        transform: scale(1.5);
-        opacity: 0
-    }
+.standalone-page-copy {
+    margin: 0 0 2rem;
+    color: #a0a0b0
+}
 
-    to {
-        transform: scale(.95);
-        opacity: 0
-    }
+.standalone-page-meta {
+    margin-top: 2rem;
+    color: #7f8996;
+    font-size: .9rem
+}
+
+.standalone-page-meta code {
+    overflow-wrap: anywhere
 }
 
 @media (max-width: 1280px) {
@@ -951,8 +897,12 @@ a {
         grid-template-columns:1fr
     }
 
+    .brand-copy h1 {
+        font-size: 4.1rem
+    }
+
     .viewer-stage-sidebar {
-        order: -1
+        order: 0
     }
 
     .table-head {
@@ -969,13 +919,21 @@ a {
         padding:1rem
     }
 
+    .brand-copy h1 {
+        font-size: 3.25rem
+    }
+
+    .hero-panel {
+        min-height: 320px
+    }
+
     .selected-channel-grid,.status-strip {
         grid-template-columns: 1fr
     }
 
     .blocked-panel,.player-footer,.topbar,.viewer-toolbar {
         flex-direction: column;
-        align-items: flex-start
+        align-items: stretch
     }
 
     .topbar-actions,.viewer-toolbar-actions {
@@ -993,6 +951,7 @@ a {
         left: .85rem;
         right: .85rem;
         bottom: .85rem;
+        max-height: calc(100dvh - 1.7rem);
         transform: translateY(105%)
     }
 
@@ -1010,23 +969,325 @@ a {
 }
 
 @media (max-width: 720px) {
+    body:before {
+        background-size: 36px 36px
+    }
+
     .admin-panel,.auth-panel,.brand-band,.player-shell,.profile-panel,.selected-channel-card,.stat-card,.users-table,.viewer-shell {
-        border-radius:22px
+        border-radius:18px
+    }
+
+    .app-shell,.auth-layout {
+        gap: .75rem;
+        padding: .65rem
+    }
+
+    .auth-layout,.brand-band {
+        min-height: auto
     }
 
     .admin-panel,.auth-panel,.brand-band,.viewer-shell {
+        padding: .85rem
+    }
+
+    .brand-band {
+        gap: .85rem
+    }
+
+    .brand-copy h1 {
+        margin: .35rem 0 .7rem;
+        font-size: 2.75rem;
+        line-height: .95
+    }
+
+    .brand-copy p,.viewer-toolbar-copy p:last-child {
+        font-size: .95rem
+    }
+
+    .hero-panel {
+        min-height: 180px;
         padding: 1rem
     }
 
+    .hero-panel img {
+        width: min(220px,62vw);
+        height: auto
+    }
+
+    .auth-switch,.topbar-actions,.viewer-toolbar-actions {
+        display: grid;
+        grid-template-columns: repeat(2,minmax(0,1fr));
+        gap: .55rem;
+        width: 100%
+    }
+
+    .auth-switch>button,.topbar-actions>button,.viewer-toolbar-actions>button {
+        width: 100%;
+        min-height: 42px;
+        padding: .68rem .72rem
+    }
+
+    .viewer-toolbar-actions>button:last-child {
+        grid-column: 1/-1
+    }
+
+    .topbar {
+        gap: .75rem;
+        padding: .75rem
+    }
+
+    .topbar-brand {
+        align-items: flex-start;
+        gap: .7rem
+    }
+
+    .topbar-brand img {
+        width: 44px;
+        height: 44px;
+        border-radius: 14px;
+        padding: .35rem
+    }
+
+    .topbar-brand strong {
+        font-size: 1.02rem;
+        line-height: 1.18
+    }
+
+    .eyebrow,.field span,.group-label,.player-active-meta {
+        letter-spacing: .1em;
+        font-size: .66rem
+    }
+
+    .status-strip,.viewer-grid,.viewer-layout,.viewer-shell {
+        gap: .7rem
+    }
+
+    .stat-card {
+        min-height: 74px;
+        padding: .8rem;
+        grid-gap: .65rem;
+        gap: .65rem
+    }
+
+    .stat-card span {
+        margin-bottom: .2rem;
+        font-size: .68rem
+    }
+
+    .stat-card strong {
+        font-size: .95rem;
+        overflow-wrap: anywhere
+    }
+
+    .viewer-toolbar {
+        gap: .75rem;
+        margin-bottom: .75rem
+    }
+
+    .viewer-toolbar-copy h2 {
+        font-size: 1.4rem;
+        line-height: 1.15
+    }
+
+    .profile-panel {
+        padding: .85rem
+    }
+
+    .panel-header {
+        flex-direction: column;
+        gap: .55rem
+    }
+
+    .panel-header h2,.panel-header h3 {
+        overflow-wrap: anywhere
+    }
+
+    .field.compact {
+        flex-basis: 100%
+    }
+
+    .field.compact input,.input-shell,.search-shell,.table-input {
+        min-height: 44px;
+        padding: 0 .8rem;
+        border-radius: 14px
+    }
+
     .player-video-frame {
+        min-height: clamp(178px,56vw,220px)
+    }
+
+    .player-shell-empty {
         min-height: 220px
+    }
+
+    .player-empty-state {
+        flex-direction: column;
+        gap: .75rem;
+        text-align: center
+    }
+
+    .player-footer {
+        gap: .75rem;
+        padding: .85rem
+    }
+
+    .player-active-title {
+        font-size: 1.08rem;
+        white-space: normal;
+        overflow-wrap: anywhere
+    }
+
+    .player-controls-hint {
+        justify-content: flex-start;
+        border-radius: 16px;
+        padding: .7rem .8rem;
+        white-space: normal
     }
 
     .inline-form>button,.player-controls-hint,.selected-channel-actions>button,.topbar-actions>button,.viewer-toolbar-actions>button {
         width: 100%
     }
 
+    .viewer-drawer,.viewer-drawer-right {
+        inset: .55rem;
+        left: .55rem;
+        right: .55rem;
+        bottom: .55rem;
+        max-height: calc(100dvh - 1.1rem);
+        padding: .75rem;
+        border-radius: 18px
+    }
+
+    .drawer-header,.drawer-meta-row {
+        flex-wrap: wrap;
+        gap: .55rem
+    }
+
+    .channel-list-row {
+        grid-template-columns: minmax(0,1fr) 38px;
+        gap: .4rem;
+        padding: .25rem;
+        border-radius: 14px
+    }
+
+    .channel-list-main {
+        gap: .5rem;
+        padding: .74rem .7rem
+    }
+
+    .quality-badge {
+        min-width: 42px;
+        padding: .28rem .42rem
+    }
+
+    .sidebar-favorite-btn {
+        width: 38px;
+        min-width: 38px;
+        height: 38px;
+        border-radius: 12px
+    }
+
+    .favorite-row {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: .28rem;
+        min-height: 0;
+        padding: .8rem
+    }
+
+    .admin-summary-grid {
+        gap: .7rem
+    }
+
+    .admin-panel {
+        overflow: visible
+    }
+
+    .admin-create-form {
+        gap: .7rem;
+        padding: .75rem;
+        border-radius: 16px
+    }
+
+    .users-table {
+        border-radius: 18px
+    }
+
+    .table-row {
+        gap: .75rem;
+        padding: .85rem
+    }
+
+    .row-actions {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: .55rem
+    }
+
+    .blocked-state,.splash-screen {
+        padding: .75rem
+    }
+
+    .blocked-panel {
+        display: grid;
+        grid-template-columns: 1fr;
+        padding: 1rem;
+        border-radius: 18px
+    }
+
+    .auth-footnote,.error-banner,.inline-notice,.player-notice {
+        align-items: flex-start;
+        border-radius: 14px;
+        padding: .75rem .85rem
+    }
+
+    .standalone-page {
+        padding: .75rem
+    }
+
+    .standalone-page h1 {
+        margin-bottom: 1rem;
+        font-size: 1.35rem
+    }
+
+    .standalone-page-copy {
+        margin-bottom: 1rem;
+        font-size: .95rem
+    }
+
+    .standalone-page-meta {
+        margin-top: 1rem;
+        font-size: .82rem
+    }
+
     .selected-channel-head {
+        align-items: flex-start
+    }
+}
+
+@media (max-width: 420px) {
+    .auth-switch,.topbar-actions,.viewer-toolbar-actions {
+        grid-template-columns: 1fr
+    }
+
+    .viewer-toolbar-actions>button:last-child {
+        grid-column: auto
+    }
+
+    .brand-copy h1 {
+        font-size: 2.35rem
+    }
+
+    .hero-panel {
+        min-height: 150px
+    }
+
+    .player-video-frame {
+        min-height: 178px
+    }
+
+    .drawer-meta-row {
+        flex-direction: column;
         align-items: flex-start
     }
 }

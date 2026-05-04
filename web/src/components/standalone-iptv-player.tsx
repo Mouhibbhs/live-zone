@@ -99,99 +99,158 @@ export default function StandaloneIPTVPlayer({ url, title = "IPTV Stream" }: Pla
   };
 
   return (
-    <div className="standalone-player" style={{
-      maxWidth: "1200px",
-      margin: "0 auto",
-      background: "#0a0a0a",
-      borderRadius: "12px",
-      overflow: "hidden",
-      boxShadow: "0 20px 40px rgba(0,0,0,0.5)",
-      fontFamily: "system-ui, sans-serif"
-    }}>
-      {/* Video Player */}
-      <div style={{ position: "relative", aspectRatio: "16/9", background: "#000" }}>
+    <div className="standalone-player">
+      <div className="standalone-video-shell">
         <video
           ref={videoRef}
           controls
           autoPlay
           muted
           playsInline
-          style={{ width: "100%", height: "100%", objectFit: "contain" }}
+          className="standalone-video"
           poster="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgwIiBoZWlnaHQ9IjI3MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjMDAwIiBzdHJva2U9Im5vbmUiLz48L3N2Zz4="
         />
-        
-        {/* Error overlay */}
-        {error && (
-          <div style={{
-            position: "absolute",
-            inset: 0,
-            background: "rgba(0,0,0,0.9)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "white",
-            textAlign: "center",
-            padding: "2rem"
-          }}>
-            <div>
-              <h2 style={{ color: "#ff4444", marginBottom: "1rem" }}>Stream Error</h2>
-              <p>{error}</p>
-              <button 
-                onClick={() => window.location.reload()}
-                style={{
-                  marginTop: "1rem",
-                  padding: "0.75rem 1.5rem",
-                  background: "#e94560",
-                  color: "white",
-                  border: "none",
-                  borderRadius: "6px",
-                  cursor: "pointer"
-                }}
-              >
-                🔄 Retry Stream
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Live indicator */}
-        <div style={{
-          position: "absolute",
-          top: "1rem",
-          left: "1rem",
-          background: "rgba(0,0,0,0.7)",
-          padding: "0.5rem 1rem",
-          borderRadius: "20px",
-          color: "#00ff88",
-          fontWeight: "bold",
-          fontSize: "0.9rem",
-          backdropFilter: "blur(10px)"
-        }}>
-          <span style={{ animation: "pulse 2s infinite" }}>● LIVE</span>
-        </div>
       </div>
 
-      {/* Controls & Stats */}
-      <div style={{ padding: "1rem 1.5rem", background: "#1a1a2e" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "1rem" }}>
-          <div>
-            <h2 style={{ margin: 0, color: "white", fontSize: "1.2rem" }}>{title}</h2>
-            <div style={{ color: "#a0a0b0", fontSize: "0.85rem" }}>
-              Quality: <span style={{ color: "#00d9ff", fontWeight: "bold" }}>{quality}</span> | 
-              Buffer: <span style={{ color: "#ffaa00", fontWeight: "bold" }}>{formatBuffer(buffered)}</span>
+      <div className="standalone-player-footer">
+        <div className="standalone-player-row">
+          <div className="standalone-player-copy">
+            <h2>{title}</h2>
+            <div className="standalone-player-stats">
+              <span>Quality: <strong className="quality-value">{quality}</strong></span>
+              <span>Buffer: <strong className="buffer-value">{formatBuffer(buffered)}</strong></span>
             </div>
+            {error ? <p className="standalone-player-error">{error}</p> : null}
           </div>
-          <div style={{ display: "flex", gap: "0.5rem", fontSize: "0.85rem", color: "#a0a0b0" }}>
-            <button onClick={() => videoRef.current?.play()} style={{ padding: "0.5rem 1rem", background: "#00d9ff", color: "#000", border: "none", borderRadius: "4px", cursor: "pointer" }}>▶ Play</button>
-            <button onClick={() => videoRef.current?.pause()} style={{ padding: "0.5rem 1rem", background: "#666", color: "white", border: "none", borderRadius: "4px", cursor: "pointer" }}>⏸ Pause</button>
+          <div className="standalone-player-actions">
+            <button onClick={() => videoRef.current?.play()} type="button">Play</button>
+            <button onClick={() => videoRef.current?.pause()} type="button">Pause</button>
           </div>
         </div>
       </div>
 
       <style jsx>{`
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.5; }
+        .standalone-player {
+          width: 100%;
+          max-width: 1200px;
+          margin: 0 auto;
+          overflow: hidden;
+          border-radius: 12px;
+          background: #0a0a0a;
+          box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+          font-family: system-ui, sans-serif;
+        }
+
+        .standalone-video-shell {
+          position: relative;
+          width: 100%;
+          aspect-ratio: 16 / 9;
+          overflow: hidden;
+          background: #000;
+        }
+
+        .standalone-video {
+          display: block;
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          background: #000;
+        }
+
+        .standalone-player-footer {
+          padding: 1rem 1.5rem;
+          background: #1a1a2e;
+        }
+
+        .standalone-player-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 1rem;
+          min-width: 0;
+        }
+
+        .standalone-player-copy {
+          min-width: 0;
+        }
+
+        .standalone-player-copy h2 {
+          margin: 0;
+          color: white;
+          font-size: 1.2rem;
+          line-height: 1.2;
+          overflow-wrap: anywhere;
+        }
+
+        .standalone-player-stats {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.35rem 0.75rem;
+          margin-top: 0.25rem;
+          color: #a0a0b0;
+          font-size: 0.85rem;
+        }
+
+        .quality-value {
+          color: #00d9ff;
+        }
+
+        .buffer-value {
+          color: #ffaa00;
+        }
+
+        .standalone-player-error {
+          margin: 0.45rem 0 0;
+          color: #ffb4ad;
+          font-size: 0.85rem;
+          overflow-wrap: anywhere;
+        }
+
+        .standalone-player-actions {
+          display: flex;
+          flex: 0 0 auto;
+          gap: 0.5rem;
+        }
+
+        .standalone-player-actions button {
+          min-height: 38px;
+          padding: 0.5rem 1rem;
+          border: 0;
+          border-radius: 6px;
+          background: #00d9ff;
+          color: #000;
+          cursor: pointer;
+          font: inherit;
+        }
+
+        .standalone-player-actions button + button {
+          background: #666;
+          color: white;
+        }
+
+        @media (max-width: 560px) {
+          .standalone-player-footer {
+            padding: 0.85rem;
+          }
+
+          .standalone-player-row {
+            align-items: stretch;
+            flex-direction: column;
+            gap: 0.85rem;
+          }
+
+          .standalone-player-copy h2 {
+            font-size: 1.05rem;
+          }
+
+          .standalone-player-actions {
+            display: grid;
+            grid-template-columns: 1fr;
+          }
+
+          .standalone-player-actions button {
+            width: 100%;
+          }
         }
       `}</style>
     </div>
