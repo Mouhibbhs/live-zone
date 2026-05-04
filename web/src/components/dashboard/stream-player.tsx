@@ -1,424 +1,307 @@
 "use client";
 
-import Hls from "hls.js";
-import { AlertTriangle, RefreshCw, Tv2 } from "lucide-react";
+import { Tv2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { Player as MpegtsPlayer } from "mpegts.js";
+import Hls from "hls.js";
 
-import { buildDirectLiveStreamUrl, getIptvProxyBases, proxyLiveStreamUrl } from "@/lib/stream-url";
 import type { LiveChannel } from "@/lib/types";
+import { getIptvProxyBase } from "@/lib/stream-url";
 
-type PlayerState = "idle" | "loading" | "playing" | "error";
-type PlaybackKind = "hls" | "mpegts";
+type MpegtsPlayer = {
+  attachMediaElement(mediaElement: HTMLMediaElement): void;
+  load(): void;
+  play(): Promise<void>;
+  pause(): void;
+  unload(): void;
+  destroy(): void;
+  on(event: string, callback: (...args: unknown[]) => void): void;
+};
 
-interface PlaybackStrategy {
-  kind: PlaybackKind;
+type MpegtsModule = {
+  createPlayer(
+    dataSource: { type: string; url: string; isLive?: boolean },
+    config?: Record<string, unknown>,
+  ): MpegtsPlayer;
+  isSupported(): boolean;
+  Events: {
+    ERROR: string;
+  };
+};
+
+type Strategy = {
+  kind: "hls" | "mpegts";
   label: string;
   url: string;
-}
+};
 
-function isHlsUrl(url: string): boolean {
-  return url.split("?")[0].toLowerCase().endsWith(".m3u8");
-}
+const XTREAM_LIVE_STREAM_PATTERN =
+  /^(https?:\/\/.+\/live\/[^/]+\/[^/]+\/[^/.?]+)(?:\.(?:m3u8|ts|m2ts|flv))?(\?.*)?$/i;
 
-function canTryDirectUrl(url: string): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
+function unwrapProxyUrl(streamUrl: string) {
   try {
-    const parsed = new URL(url);
-    return window.location.protocol !== "https:" || parsed.protocol === "https:";
+    const parsed = new URL(streamUrl);
+    return parsed.searchParams.get("url") || streamUrl;
   } catch {
-    return true;
+    return streamUrl;
   }
 }
 
-function pushUnique(strategies: PlaybackStrategy[], strategy: PlaybackStrategy) {
-  if (!strategy.url || strategies.some((item) => item.kind === strategy.kind && item.url === strategy.url)) {
-    return;
+function buildDirectUrl(streamUrl: string, ext: "m3u8" | "ts") {
+  const trimmed = unwrapProxyUrl(streamUrl.trim());
+  const match = trimmed.match(XTREAM_LIVE_STREAM_PATTERN);
+
+  if (!match) {
+    return trimmed;
   }
 
-  strategies.push(strategy);
+  return `${match[1]}.${ext}${match[2] ?? ""}`;
 }
 
-function buildPlaybackStrategies(streamUrl: string): PlaybackStrategy[] {
-  const exactUrl = streamUrl.trim();
-  const hlsUrl = buildDirectLiveStreamUrl(exactUrl, "m3u8");
-  const tsUrl = buildDirectLiveStreamUrl(exactUrl, "ts");
-  const proxyBases = getIptvProxyBases();
-  const strategies: PlaybackStrategy[] = [];
-
-  if (exactUrl && isHlsUrl(exactUrl) && canTryDirectUrl(exactUrl)) {
-    pushUnique(strategies, {
-      kind: "hls",
-      label: "Direct HLS",
-      url: exactUrl,
-    });
-  }
-
-  for (const proxyBase of proxyBases) {
-    if (exactUrl && isHlsUrl(exactUrl)) {
-      pushUnique(strategies, {
-        kind: "hls",
-        label: "Proxy HLS",
-        url: proxyLiveStreamUrl(exactUrl, proxyBase),
-      });
-    }
-  }
-
-  if (hlsUrl && hlsUrl !== exactUrl && canTryDirectUrl(hlsUrl)) {
-    pushUnique(strategies, {
-      kind: "hls",
-      label: "Direct HLS",
-      url: hlsUrl,
-    });
-  }
-
-  for (const proxyBase of proxyBases) {
-    if (hlsUrl) {
-      pushUnique(strategies, {
-        kind: "hls",
-        label: "Proxy HLS",
-        url: proxyLiveStreamUrl(hlsUrl, proxyBase),
-      });
-    }
-  }
-
-  if (tsUrl && tsUrl !== hlsUrl) {
-    for (const proxyBase of proxyBases) {
-      pushUnique(strategies, {
-        kind: "mpegts",
-        label: "Proxy MPEG-TS",
-        url: proxyLiveStreamUrl(tsUrl, proxyBase),
-      });
-    }
-
-    if (canTryDirectUrl(tsUrl)) {
-      pushUnique(strategies, {
-        kind: "mpegts",
-        label: "Direct MPEG-TS",
-        url: tsUrl,
-      });
-    }
-  }
-
-  if (strategies.length === 0 && exactUrl) {
-    pushUnique(strategies, {
-      kind: isHlsUrl(exactUrl) ? "hls" : "mpegts",
-      label: "Direct stream",
-      url: exactUrl,
-    });
-  }
-
-  return strategies;
+function buildProxyUrl(url: string) {
+  const proxyBase = getIptvProxyBase();
+  return proxyBase ? `${proxyBase}?url=${encodeURIComponent(url)}` : "";
 }
 
-function describeError(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
+function buildStrategies(streamUrl: string): Strategy[] {
+  const directHls = buildDirectUrl(streamUrl, "m3u8");
+  const directTs = buildDirectUrl(streamUrl, "ts");
+  const proxyHls = buildProxyUrl(directHls);
+  const proxyTs = buildProxyUrl(directTs);
+
+  const strategies: Strategy[] = [];
+
+  if (proxyHls) {
+    strategies.push({ kind: "hls", label: "Proxy HLS", url: proxyHls });
+  }
+
+  strategies.push({ kind: "hls", label: "Direct HLS", url: directHls });
+
+  if (proxyTs) {
+    strategies.push({ kind: "mpegts", label: "Proxy MPEG-TS", url: proxyTs });
+  }
+
+  strategies.push({ kind: "mpegts", label: "Direct MPEG-TS", url: directTs });
+
+  return strategies.filter((item, index, array) => item.url && array.findIndex((entry) => entry.url === item.url) === index);
+}
+
+async function loadMpegtsModule(): Promise<MpegtsModule | null> {
+  try {
+    const module = await import("mpegts.js");
+    const lib = (module.default ?? module) as unknown as MpegtsModule;
+    return lib.isSupported() ? lib : null;
+  } catch {
+    return null;
+  }
 }
 
 export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const mpegtsRef = useRef<MpegtsPlayer | null>(null);
-  const [playerState, setPlayerState] = useState<PlayerState>("idle");
-  const [message, setMessage] = useState("Select a channel to start playback.");
-  const [retryNonce, setRetryNonce] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string>("Idle");
 
   useEffect(() => {
+    let cancelled = false;
     const video = videoRef.current;
 
-    if (!video || !channel) {
-      setPlayerState("idle");
-      setMessage("Select a channel to start playback.");
-      return;
-    }
-
-    const currentVideo = video;
-    const strategies = buildPlaybackStrategies(channel.streamUrl);
-    const errors: string[] = [];
-    let activeStrategyIndex = 0;
-    let cancelled = false;
-    let loadTimeoutId: number | null = null;
-    let stalledTimeoutId: number | null = null;
-    let recoveredMediaError = false;
-    let suppressVideoErrors = false;
-
-    function clearLoadTimeout() {
-      if (loadTimeoutId !== null) {
-        window.clearTimeout(loadTimeoutId);
-        loadTimeoutId = null;
-      }
-    }
-
-    function clearStalledTimeout() {
-      if (stalledTimeoutId !== null) {
-        window.clearTimeout(stalledTimeoutId);
-        stalledTimeoutId = null;
-      }
-    }
-
-    function destroyPlayers() {
+    function cleanup() {
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
       }
 
       if (mpegtsRef.current) {
-        mpegtsRef.current.unload();
-        mpegtsRef.current.detachMediaElement();
-        mpegtsRef.current.destroy();
+        try {
+          mpegtsRef.current.pause();
+          mpegtsRef.current.unload();
+          mpegtsRef.current.destroy();
+        } catch {}
+
         mpegtsRef.current = null;
       }
+
+      if (video) {
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+      }
     }
 
-    function resetVideo() {
-      suppressVideoErrors = true;
-      currentVideo.pause();
-      currentVideo.removeAttribute("src");
-      currentVideo.load();
-      window.setTimeout(() => {
-        suppressVideoErrors = false;
-      }, 0);
-    }
-
-    function cleanup() {
-      clearLoadTimeout();
-      clearStalledTimeout();
-      destroyPlayers();
-      resetVideo();
-    }
-
-    function failPlayback(nextMessage: string) {
-      if (cancelled) {
-        return;
+    async function tryHls(strategy: Strategy) {
+      if (!video) {
+        throw new Error("Video element not ready.");
       }
 
-      clearLoadTimeout();
-      clearStalledTimeout();
-      setPlayerState("error");
-      setMessage(errors.length > 0 ? `${nextMessage} Last errors: ${errors.slice(-2).join(" | ")}` : nextMessage);
-    }
+      cleanup();
+      setStatus(`Trying ${strategy.label}...`);
 
-    function startLoadTimer(strategy: PlaybackStrategy) {
-      clearLoadTimeout();
-      loadTimeoutId = window.setTimeout(() => {
-        tryNextStrategy(`${strategy.label} timed out while loading.`);
-      }, 18000);
-    }
-
-    function tryNextStrategy(reason: string) {
-      if (cancelled) {
-        return;
-      }
-
-      const currentStrategy = strategies[activeStrategyIndex];
-
-      if (currentStrategy) {
-        errors.push(`${currentStrategy.label}: ${reason}`);
-      }
-
-      const nextIndex = activeStrategyIndex + 1;
-
-      if (nextIndex >= strategies.length) {
-        failPlayback(reason);
-        return;
-      }
-
-      void startStrategy(nextIndex, reason);
-    }
-
-    function startHls(strategy: PlaybackStrategy) {
-      if (Hls.isSupported()) {
+      await new Promise<void>((resolve, reject) => {
         const hls = new Hls({
           enableWorker: true,
-          lowLatencyMode: false,
+          lowLatencyMode: true,
+          liveSyncDurationCount: 3,
+          liveMaxLatencyDurationCount: 6,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 60,
+          backBufferLength: 90,
           liveDurationInfinity: true,
-          liveSyncDurationCount: 4,
-          liveMaxLatencyDurationCount: 9,
-          maxBufferLength: 35,
-          maxMaxBufferLength: 70,
-          backBufferLength: 20,
-          manifestLoadingMaxRetry: 1,
-          levelLoadingMaxRetry: 1,
-          fragLoadingMaxRetry: 2,
+          abrEwmaFastLive: 3,
+          abrEwmaSlowLive: 9,
         });
 
         hlsRef.current = hls;
 
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          if (cancelled) {
-            return;
-          }
+        const timeoutId = window.setTimeout(() => {
+          reject(new Error(`${strategy.label} timed out.`));
+        }, 12000);
 
-          setMessage("Live manifest loaded. Starting playback...");
-          void currentVideo.play().catch((error: unknown) => {
-            tryNextStrategy(describeError(error, "Unable to start HLS playback."));
-          });
+        const onPlaying = () => {
+          window.clearTimeout(timeoutId);
+          video.removeEventListener("playing", onPlaying);
+          resolve();
+        };
+
+        video.addEventListener("playing", onPlaying, { once: true });
+
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          void video.play().catch(() => undefined);
         });
 
         hls.on(Hls.Events.ERROR, (_event, data) => {
-          if (!data.fatal || cancelled) {
-            return;
+          if (data.fatal) {
+            window.clearTimeout(timeoutId);
+            video.removeEventListener("playing", onPlaying);
+            reject(new Error(`${strategy.label} failed: ${data.details}`));
           }
-
-          if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !recoveredMediaError) {
-            recoveredMediaError = true;
-            hls.recoverMediaError();
-            return;
-          }
-
-          const responseCode = data.response?.code ? ` (${data.response.code})` : "";
-          tryNextStrategy(`${data.details}${responseCode}`);
         });
 
         hls.loadSource(strategy.url);
-        hls.attachMedia(currentVideo);
-        return;
-      }
-
-      if (currentVideo.canPlayType("application/vnd.apple.mpegurl")) {
-        currentVideo.src = strategy.url;
-        void currentVideo.play().catch((error: unknown) => {
-          tryNextStrategy(describeError(error, "Unable to start native HLS playback."));
-        });
-        return;
-      }
-
-      tryNextStrategy("This browser does not support HLS playback.");
+        hls.attachMedia(video);
+      });
     }
 
-    async function startMpegTs(strategy: PlaybackStrategy) {
-      try {
-        const mpegts = (await import("mpegts.js")).default;
+    async function tryMpegts(strategy: Strategy) {
+      if (!video) {
+        throw new Error("Video element not ready.");
+      }
 
-        if (cancelled) {
-          return;
-        }
+      const lib = await loadMpegtsModule();
 
-        if (!mpegts.isSupported()) {
-          tryNextStrategy("This browser does not support MPEG-TS playback.");
-          return;
-        }
+      if (!lib) {
+        throw new Error("mpegts.js is not available in this browser.");
+      }
 
-        const player = mpegts.createPlayer(
+      cleanup();
+      setStatus(`Trying ${strategy.label}...`);
+
+      await new Promise<void>((resolve, reject) => {
+        const player = lib.createPlayer(
           {
-            type: "mpegts",
-            isLive: true,
+            type: "mse",
             url: strategy.url,
+            isLive: true,
           },
           {
             enableWorker: true,
             enableStashBuffer: true,
-            stashInitialSize: 512 * 1024,
+            stashInitialSize: 1024,
             liveBufferLatencyChasing: true,
-            liveBufferLatencyMaxLatency: 8,
-            liveBufferLatencyMinLatency: 2,
-            autoCleanupMaxBackwardDuration: 20,
-            autoCleanupMaxForwardDuration: 45,
+            liveBufferLatencyMaxLatency: 15,
+            liveBufferLatencyMinLatency: 4,
           },
         );
 
         mpegtsRef.current = player;
 
-        player.on(mpegts.Events.ERROR, (type: unknown, detail: unknown) => {
-          tryNextStrategy(`${String(type || "stream error")}: ${String(detail || "network error")}`);
+        const timeoutId = window.setTimeout(() => {
+          reject(new Error(`${strategy.label} timed out.`));
+        }, 12000);
+
+        const onPlaying = () => {
+          window.clearTimeout(timeoutId);
+          video.removeEventListener("playing", onPlaying);
+          resolve();
+        };
+
+        video.addEventListener("playing", onPlaying, { once: true });
+
+        player.on(lib.Events.ERROR, (...args: unknown[]) => {
+          const detail = typeof args[1] === "string" ? args[1] : "mpegts error";
+          window.clearTimeout(timeoutId);
+          video.removeEventListener("playing", onPlaying);
+          reject(new Error(`${strategy.label} failed: ${detail}`));
         });
 
-        player.attachMediaElement(currentVideo);
+        player.attachMediaElement(video);
         player.load();
-        void player.play().catch((error: unknown) => {
-          tryNextStrategy(describeError(error, "Unable to start MPEG-TS playback."));
-        });
-      } catch (error) {
-        tryNextStrategy(describeError(error, "Unable to load MPEG-TS player."));
-      }
+        void player.play().catch(() => undefined);
+      });
     }
 
-    async function startStrategy(index: number, previousReason?: string) {
-      const strategy = strategies[index];
-
-      if (!strategy) {
-        failPlayback("No playable stream URL was found for this channel.");
+    async function startPlayback() {
+      if (!video || !channel) {
         return;
       }
 
-      activeStrategyIndex = index;
-      recoveredMediaError = false;
+      setLoading(true);
+      setError(null);
+      setStatus("Preparing stream...");
+
+      video.muted = true;
+      video.autoplay = true;
+      video.playsInline = true;
+
+      const strategies = buildStrategies(channel.streamUrl);
+      let lastError = "No playable stream source was found.";
+
+      for (const strategy of strategies) {
+        if (cancelled) {
+          return;
+        }
+
+        try {
+          if (strategy.kind === "hls") {
+            await tryHls(strategy);
+          } else {
+            await tryMpegts(strategy);
+          }
+
+          if (!cancelled) {
+            setLoading(false);
+            setError(null);
+            setStatus(`${strategy.label} connected`);
+          }
+          return;
+        } catch (attemptError) {
+          lastError = attemptError instanceof Error ? attemptError.message : String(attemptError);
+        }
+      }
+
+      if (!cancelled) {
+        setLoading(false);
+        setError(lastError);
+        setStatus("Playback failed");
+      }
+    }
+
+    if (!channel || !video) {
       cleanup();
-      currentVideo.muted = true;
-      currentVideo.autoplay = true;
-      currentVideo.playsInline = true;
-      setPlayerState("loading");
-      setMessage(
-        previousReason
-          ? `${previousReason} Trying ${strategy.label}...`
-          : `Loading ${strategy.label} live stream...`,
-      );
-      startLoadTimer(strategy);
-
-      if (strategy.kind === "hls") {
-        startHls(strategy);
-        return;
-      }
-
-      await startMpegTs(strategy);
+      return () => {
+        cancelled = true;
+        cleanup();
+      };
     }
 
-    const onPlaying = () => {
-      clearLoadTimeout();
-      clearStalledTimeout();
-      setPlayerState("playing");
-      setMessage("Live stream connected.");
-    };
-
-    const onWaiting = () => {
-      if (cancelled) {
-        return;
-      }
-
-      setMessage("Buffering live stream...");
-      clearStalledTimeout();
-      stalledTimeoutId = window.setTimeout(() => {
-        tryNextStrategy("buffering stalled");
-      }, 12000);
-    };
-
-    const onTimeUpdate = () => {
-      clearStalledTimeout();
-    };
-
-    const onEnded = () => {
-      tryNextStrategy("stream ended");
-    };
-
-    const onError = () => {
-      if (suppressVideoErrors) {
-        return;
-      }
-
-      tryNextStrategy(currentVideo.error?.message || "video element error");
-    };
-
-    currentVideo.addEventListener("playing", onPlaying);
-    currentVideo.addEventListener("waiting", onWaiting);
-    currentVideo.addEventListener("timeupdate", onTimeUpdate);
-    currentVideo.addEventListener("ended", onEnded);
-    currentVideo.addEventListener("error", onError);
-
-    void startStrategy(0);
+    void startPlayback();
 
     return () => {
       cancelled = true;
-      currentVideo.removeEventListener("playing", onPlaying);
-      currentVideo.removeEventListener("waiting", onWaiting);
-      currentVideo.removeEventListener("timeupdate", onTimeUpdate);
-      currentVideo.removeEventListener("ended", onEnded);
-      currentVideo.removeEventListener("error", onError);
       cleanup();
     };
-  }, [channel?.id, channel?.streamUrl, retryNonce]);
+  }, [channel]);
 
   if (!channel) {
     return (
@@ -433,61 +316,91 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   }
 
   return (
-    <div className="player-shell livezone-player">
-      <div className="player-video-frame">
-        <video ref={videoRef} className="player-video" autoPlay muted controls playsInline preload="auto" />
-
-        {playerState === "loading" ? (
-          <div className="player-overlay">
-            <div className="player-overlay-card">
-              <RefreshCw className="spin" size={28} />
-              <div className="player-overlay-copy">
-                <strong>Preparing live stream</strong>
-                <p>{message}</p>
-              </div>
+    <div className="hls-player">
+      <div className="player-container">
+        <video ref={videoRef} className="player-video" autoPlay muted controls playsInline preload="metadata" />
+        {loading ? (
+          <div className="error-overlay">
+            <div className="error-content">
+              <h4>Loading stream</h4>
+              <p>{status}</p>
             </div>
           </div>
         ) : null}
-
-        {playerState === "error" ? (
-          <div className="player-overlay">
-            <div className="player-overlay-card player-error-card">
-              <AlertTriangle size={30} />
-              <div className="player-overlay-copy">
-                <strong>Playback failed</strong>
-                <p>{message}</p>
-              </div>
-              <button className="primary-button" onClick={() => setRetryNonce((value) => value + 1)} type="button">
-                <RefreshCw size={16} />
-                Retry stream
-              </button>
+        {error ? (
+          <div className="error-overlay">
+            <div className="error-content">
+              <h4>Stream Error</h4>
+              <p>{error}</p>
+              <p>{status}</p>
             </div>
           </div>
         ) : null}
       </div>
 
-      <div className="player-footer">
-        <div className="player-current-info">
-          <p className="player-active-meta">Now playing</p>
-          <h3 className="player-active-title">{channel.name}</h3>
-          <p className="player-active-copy">{message}</p>
+      <div className="player-info">
+        <div className="channel-title">{channel.name}</div>
+        <div className="player-stats">
+          <span>{status}</span>
         </div>
       </div>
 
       <style jsx>{`
-        .livezone-player {
-          border-radius: var(--radius-xl);
+        .hls-player {
+          width: 100%;
+          max-width: 100%;
+          background: #000;
+          border-radius: 12px;
+          overflow: hidden;
+          font-family: system-ui, sans-serif;
         }
 
-        .player-error-card {
-          border-color: rgba(255, 107, 95, 0.26);
-          background:
-            radial-gradient(circle at top, rgba(255, 107, 95, 0.12), transparent 42%),
-            rgba(7, 13, 21, 0.9);
+        .player-container {
+          position: relative;
+          aspect-ratio: 16 / 9;
+          background: #000;
         }
 
-        .player-error-card :global(svg) {
-          color: var(--danger);
+        .player-video {
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+        }
+
+        .error-overlay {
+          position: absolute;
+          inset: 0;
+          background: rgba(0, 0, 0, 0.82);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: white;
+          z-index: 10;
+        }
+
+        .error-content {
+          text-align: center;
+          padding: 2rem;
+          max-width: 32rem;
+        }
+
+        .player-info {
+          padding: 1rem;
+          background: #1a1a1a;
+          color: white;
+        }
+
+        .channel-title {
+          font-weight: bold;
+          margin: 0 0 0.5rem 0;
+          font-size: 1.1rem;
+        }
+
+        .player-stats {
+          display: flex;
+          gap: 1rem;
+          font-size: 0.85rem;
+          color: #aaa;
         }
       `}</style>
     </div>

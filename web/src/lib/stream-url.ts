@@ -1,96 +1,40 @@
 export const HLS_MIME_TYPE = "application/vnd.apple.mpegurl";
 
 const IPTV_PROXY_URL = process.env.NEXT_PUBLIC_IPTV_PROXY_URL?.trim().replace(/\/$/, "") || "";
-const DEFAULT_RENDER_PROXY_URL = "https://live-zone.onrender.com/proxy";
 
 const XTREAM_LIVE_STREAM_PATTERN =
   /^(https?:\/\/.+\/live\/[^/]+\/[^/]+\/[^/.?]+)(?:\.(?:m3u8|ts|m2ts|flv))?(\?.*)?$/i;
 
-function isLocalHost(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1";
-}
+export function getIptvProxyBase(): string {
+  if (IPTV_PROXY_URL) {
+    return IPTV_PROXY_URL;
+  }
 
-function getProductionProxyBase(): string {
   if (typeof window === "undefined") {
     return "";
   }
 
-  return `${window.location.origin}/api/proxy`;
-}
-
-function normalizeConfiguredProxyBase(proxyUrl: string): string {
-  try {
-    const parsed = new URL(proxyUrl);
-
-    if (parsed.pathname === "/" || parsed.pathname === "") {
-      parsed.pathname = "/proxy";
-    }
-
-    parsed.search = "";
-    parsed.hash = "";
-    return parsed.toString().replace(/\/$/, "");
-  } catch {
-    return proxyUrl;
-  }
-}
-
-export function hasConfiguredIptvProxy(): boolean {
-  return Boolean(IPTV_PROXY_URL);
-}
-
-export function getIptvProxyBases(): string[] {
-  const configuredProxyBase = IPTV_PROXY_URL
-    ? normalizeConfiguredProxyBase(IPTV_PROXY_URL)
-    : normalizeConfiguredProxyBase(DEFAULT_RENDER_PROXY_URL);
-
-  if (typeof window === "undefined") {
-    return configuredProxyBase ? [configuredProxyBase] : [];
-  }
-
   const host = window.location.hostname;
-  const bases = [configuredProxyBase];
 
-  if (isLocalHost(host) && !IPTV_PROXY_URL) {
-    bases.push("http://localhost:8787/proxy");
+  if (host === "localhost" || host === "127.0.0.1") {
+    return "http://localhost:8787/proxy";
   }
 
-  if (!IPTV_PROXY_URL && !isLocalHost(host)) {
-    bases.push(`${window.location.origin}/.netlify/functions/proxy`, getProductionProxyBase());
-  }
-
-  return bases.filter((base, index, array) => base && array.indexOf(base) === index);
+  return `${window.location.origin}/.netlify/functions/proxy`;
 }
 
-export function getIptvProxyBase(): string {
-  return getIptvProxyBases()[0] ?? "";
-}
-
-export function buildDirectLiveStreamUrl(streamUrl: string, ext: "ts" | "m3u8" = "ts"): string {
+export function normalizeLiveStreamUrl(streamUrl: string, ext: "ts" | "m3u8" = "ts"): string {
   const trimmed = streamUrl.trim();
   if (!trimmed) return "";
 
   const match = trimmed.match(XTREAM_LIVE_STREAM_PATTERN);
   if (!match) return trimmed;
 
-  return `${match[1]}.${ext}${match[2] ?? ""}`;
-}
-
-export function proxyLiveStreamUrl(streamUrl: string, proxyBase = getIptvProxyBase()): string {
-  const trimmed = streamUrl.trim();
-
-  if (!trimmed || !proxyBase) {
-    return trimmed;
-  }
-
-  return `${proxyBase}?url=${encodeURIComponent(trimmed)}`;
-}
-
-export function normalizeLiveStreamUrl(streamUrl: string, ext: "ts" | "m3u8" = "ts"): string {
-  const directUrl = buildDirectLiveStreamUrl(streamUrl, ext);
+  const directUrl = `${match[1]}.${ext}${match[2] ?? ""}`;
   const proxyBase = getIptvProxyBase();
 
   if (proxyBase) {
-    return proxyLiveStreamUrl(directUrl, proxyBase);
+    return `${proxyBase}?url=${encodeURIComponent(directUrl)}`;
   }
 
   return directUrl;
