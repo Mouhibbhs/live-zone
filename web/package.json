@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@dataconnect/generated": "file:src/dataconnect-generated",
+    "clappr": "^0.3.13",
     "firebase": "^11.1.0",
     "hls.js": "^1.6.16",
     "lucide-react": "^0.468.0",
