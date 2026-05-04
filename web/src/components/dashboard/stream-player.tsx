@@ -28,8 +28,28 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     const currentVideo = video;
     const streamUrl = normalizeLiveStreamUrl(channel.streamUrl, "m3u8");
     let cancelled = false;
+    let loadTimeoutId: number | null = null;
+
+    function clearLoadTimeout() {
+      if (loadTimeoutId !== null) {
+        window.clearTimeout(loadTimeoutId);
+        loadTimeoutId = null;
+      }
+    }
+
+    function failPlayback(nextMessage: string) {
+      if (cancelled) {
+        return;
+      }
+
+      clearLoadTimeout();
+      setPlayerState("error");
+      setMessage(nextMessage);
+    }
 
     function cleanup() {
+      clearLoadTimeout();
+
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
@@ -44,6 +64,10 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       setPlayerState("loading");
       setMessage("Loading live stream...");
       cleanup();
+
+      loadTimeoutId = window.setTimeout(() => {
+        failPlayback("Stream did not return a playable HLS manifest in time.");
+      }, 20000);
 
       currentVideo.muted = true;
       currentVideo.autoplay = true;
@@ -68,10 +92,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           void currentVideo.play().catch((error: unknown) => {
-            if (!cancelled) {
-              setPlayerState("error");
-              setMessage(error instanceof Error ? error.message : "Unable to start playback.");
-            }
+            failPlayback(error instanceof Error ? error.message : "Unable to start playback.");
           });
         });
 
@@ -80,20 +101,13 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
             return;
           }
 
-          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-            hls.startLoad();
-            return;
-          }
-
           if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
             hls.recoverMediaError();
             return;
           }
 
-          if (!cancelled) {
-            setPlayerState("error");
-            setMessage(`Stream error: ${data.details}`);
-          }
+          const responseCode = data.response?.code ? ` (${data.response.code})` : "";
+          failPlayback(`Stream request failed${responseCode}: ${data.details}`);
         });
 
         hls.loadSource(streamUrl);
@@ -108,6 +122,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     }
 
     const onPlaying = () => {
+      clearLoadTimeout();
       setPlayerState("playing");
       setMessage("Live stream connected.");
     };
@@ -119,10 +134,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     };
 
     const onError = () => {
-      if (!cancelled) {
-        setPlayerState("error");
-        setMessage(currentVideo.error?.message || "Playback failed.");
-      }
+      failPlayback(currentVideo.error?.message || "Playback failed.");
     };
 
     currentVideo.addEventListener("playing", onPlaying);
@@ -130,10 +142,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     currentVideo.addEventListener("error", onError);
 
     void playVideo().catch((error: unknown) => {
-      if (!cancelled) {
-        setPlayerState("error");
-        setMessage(error instanceof Error ? error.message : "Playback failed.");
-      }
+      failPlayback(error instanceof Error ? error.message : "Playback failed.");
     });
 
     return () => {
