@@ -3,7 +3,7 @@ const https = require("https");
 
 const PORT = Number(process.env.PORT || 8787);
 // CRITICAL: Ensure this matches your actual Render service URL
-const PROXY_BASE_URL = "https://livezone-proxy.onrender.com/proxy";
+const PROXY_BASE_URL = "https://live-zone.onrender.com/proxy";
 
 /**
  * Headers that cause browsers to trigger Auth prompts or block content.
