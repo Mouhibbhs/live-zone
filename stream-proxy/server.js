@@ -25,11 +25,24 @@ const MIME_TYPES = {
   ".mp3": "audio/mpeg",
 };
 
-const DEFAULT_UPSTREAM_USER_AGENTS = [
-  "VLC/3.0.20 LibVLC/3.0.20",
-  "IPTVSmartersPlayer",
-  "TiviMate/4.7.0 (Linux; Android 11)",
-  "Lavf/60.16.100",
+const DEFAULT_UPSTREAM_HEADER_PROFILES = [
+  {
+    userAgent: "VLC/3.0.20 LibVLC/3.0.20",
+  },
+  {
+    userAgent: "IPTVSmartersPlayer",
+  },
+  {
+    userAgent: "TiviMate/4.7.0 (Linux; Android 11)",
+  },
+  {
+    userAgent: "Lavf/60.16.100",
+  },
+  {
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    referer: "origin",
+  },
 ];
 
 function corsHeaders() {
@@ -86,28 +99,37 @@ function rewritePlaylist(req, playlistText, targetUrl) {
     .join("\n");
 }
 
-function getUpstreamUserAgents() {
+function getUpstreamHeaderProfiles() {
   const configured = process.env.UPSTREAM_USER_AGENT || process.env.UPSTREAM_USER_AGENTS || "";
-  const userAgents = configured
+  const configuredUserAgents = configured
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
 
-  return userAgents.length > 0 ? userAgents : DEFAULT_UPSTREAM_USER_AGENTS;
+  if (configuredUserAgents.length > 0) {
+    return configuredUserAgents.map((userAgent) => ({
+      userAgent,
+      referer: process.env.UPSTREAM_REFERER || "",
+    }));
+  }
+
+  return DEFAULT_UPSTREAM_HEADER_PROFILES;
 }
 
-function buildUpstreamHeaders(req, target, userAgent) {
+function buildUpstreamHeaders(req, target, profile) {
   const headers = {
     Host: target.host,
-    "User-Agent": userAgent,
+    "User-Agent": profile.userAgent,
     Accept: "*/*",
     "Icy-MetaData": "1",
     "Cache-Control": "no-cache",
     Pragma: "no-cache",
   };
 
-  if (process.env.UPSTREAM_REFERER) {
-    headers.Referer = process.env.UPSTREAM_REFERER;
+  const referer = profile.referer === "origin" ? target.origin : profile.referer;
+
+  if (referer) {
+    headers.Referer = referer;
   }
 
   if (req.headers.range) {
@@ -183,8 +205,8 @@ function proxyRequest(req, res, targetUrl, redirectCount = 0, userAgentIndex = 0
   }
 
   const client = target.protocol === "https:" ? https : http;
-  const userAgents = getUpstreamUserAgents();
-  const userAgent = userAgents[userAgentIndex] || userAgents[0];
+  const headerProfiles = getUpstreamHeaderProfiles();
+  const headerProfile = headerProfiles[userAgentIndex] || headerProfiles[0];
   const upstreamReq = client.request(
     {
       protocol: target.protocol,
@@ -192,7 +214,7 @@ function proxyRequest(req, res, targetUrl, redirectCount = 0, userAgentIndex = 0
       port: target.port || (target.protocol === "https:" ? 443 : 80),
       path: `${target.pathname}${target.search}`,
       method: req.method,
-      headers: buildUpstreamHeaders(req, target, userAgent),
+      headers: buildUpstreamHeaders(req, target, headerProfile),
       timeout: 0,
     },
     (upstream) => {
@@ -215,7 +237,7 @@ function proxyRequest(req, res, targetUrl, redirectCount = 0, userAgentIndex = 0
         return;
       }
 
-      if ((upstream.statusCode === 401 || upstream.statusCode === 403) && userAgentIndex < userAgents.length - 1) {
+      if ((upstream.statusCode === 401 || upstream.statusCode === 403) && userAgentIndex < headerProfiles.length - 1) {
         upstream.resume();
         proxyRequest(req, res, targetUrl, redirectCount, userAgentIndex + 1);
         return;
