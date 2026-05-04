@@ -65,7 +65,7 @@ export function getIptvProxyBase(): string {
   return getIptvProxyBases()[0] ?? "";
 }
 
-function buildDirectLiveStreamUrl(streamUrl: string, ext: "ts" | "m3u8" = "ts"): string {
+export function buildDirectLiveStreamUrl(streamUrl: string, ext: "ts" | "m3u8" = "ts"): string {
   const trimmed = streamUrl.trim();
   if (!trimmed) return "";
 
