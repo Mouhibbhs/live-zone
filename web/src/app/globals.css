@@ -713,62 +713,14 @@ a {
     background: #000
 }
 
-.player-clappr-host,.player-clappr-host>div {
+.player-video {
     position: absolute;
     inset: 0;
+    z-index: 0;
     width: 100%;
     height: 100%;
-    background: #000
-}
-
-.player-clappr-host .player-poster,.player-clappr-host .poster,.player-clappr-host video {
-    width: 100%!important;
-    height: 100%!important
-}
-
-.player-clappr-host .player-poster,.player-clappr-host video {
-    object-fit: contain;
-    background: #000
-}
-
-.player-clappr-host .media-control {
-    background: transparent!important;
-    border-radius: 0!important
-}
-
-.player-clappr-host .media-control[data-media-control] {
-    background: transparent!important;
-    box-shadow: none!important;
-    filter: none!important
-}
-
-.player-clappr-host .media-control[data-media-control] .media-control-background[data-background] {
-    display: none!important;
-    opacity: 0!important;
-    background: transparent!important;
-    box-shadow: none!important
-}
-
-.player-clappr-host .media-control[data-media-control] .media-control-layer[data-controls] {
-    background: transparent!important;
-    box-shadow: none!important;
-    text-shadow: none!important
-}
-
-.player-clappr-host .media-control[data-media-control] .media-control-icon,.player-clappr-host .media-control[data-media-control] .media-control-icon:hover {
-    text-shadow: none!important
-}
-
-.player-clappr-host .media-control .bar-container {
-    background: rgba(255,255,255,.14)!important
-}
-
-.player-clappr-host .media-control[data-media-control] .bar-container .progress-bar-background {
-    background-color: rgba(37,176,255,.28)!important
-}
-
-.player-clappr-host .media-control .media-control-background {
-    background: transparent!important
+    background: #000;
+    object-fit: contain
 }
 
 .player-footer {
