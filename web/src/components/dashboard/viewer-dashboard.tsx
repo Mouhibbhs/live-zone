@@ -154,7 +154,6 @@ export function ViewerDashboard({
   const expiryLabel = session?.profile?.subscriptionExpiryMs
     ? new Date(session.profile.subscriptionExpiryMs).toLocaleString()
     : "Not scheduled";
-  const selectedIsFavorite = selectedChannel ? favoriteIds.has(selectedChannel.id) : false;
   const visibleChannelCount = groupedChannels.reduce((count, group) => count + group.channels.length, 0);
 
   function toggleDrawer(drawer: Exclude<ActiveDrawer, null>) {
@@ -269,54 +268,6 @@ export function ViewerDashboard({
           </div>
 
           <aside className="viewer-stage-sidebar">
-            <div className="selected-channel-card">
-              <div className="selected-channel-head">
-                {selectedChannel?.logo ? (
-                  <img alt={selectedChannel.name} className="selected-channel-logo" src={selectedChannel.logo} />
-                ) : (
-                  <div className="selected-channel-logo fallback">
-                    <Tv2 size={18} />
-                  </div>
-                )}
-
-                <div className="selected-channel-copy">
-                  <span className="eyebrow">Now Playing</span>
-                  <strong>{selectedChannel?.name ?? "No channel selected"}</strong>
-                  <p>{selectedChannel ? selectedCategoryName : "Choose a stream from the drawer to begin playback."}</p>
-                </div>
-              </div>
-
-              <div className="selected-channel-actions">
-                <button className="secondary-button" onClick={() => toggleDrawer("channels")} type="button">
-                  <Menu size={16} />
-                  Browse channels
-                </button>
-
-                {selectedChannel ? (
-                  <button
-                    className={selectedIsFavorite ? "secondary-button active" : "secondary-button"}
-                    onClick={() => void onToggleFavorite(selectedChannel.id, selectedIsFavorite)}
-                    type="button"
-                  >
-                    <Heart fill={selectedIsFavorite ? "currentColor" : "none"} size={16} />
-                    {selectedIsFavorite ? "Pinned" : "Pin channel"}
-                  </button>
-                ) : null}
-              </div>
-
-              <div className="selected-channel-grid">
-                <div className="mini-stat-card">
-                  <span>Visible now</span>
-                  <strong>{visibleChannelCount}</strong>
-                </div>
-
-                <div className="mini-stat-card">
-                  <span>Pinned</span>
-                  <strong>{favorites.length}</strong>
-                </div>
-              </div>
-            </div>
-
             <div className="profile-panel">
               <div className="panel-header">
                 <div>
