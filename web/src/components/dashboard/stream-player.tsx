@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Radio, RefreshCw, Tv2 } from "lucide-react";
+import { Radio, Tv2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
 
@@ -135,8 +135,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const currentStrategyRef = useRef<Strategy | null>(null);
   const skippedStrategyUrlsRef = useRef<Set<string>>(new Set());
   const lastChannelKeyRef = useRef("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string>("Idle");
   const [playbackNonce, setPlaybackNonce] = useState(0);
 
@@ -169,16 +167,12 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
       if (recoveryCountRef.current >= 8) {
         loadingRef.current = false;
-        setLoading(false);
-        setError(`Stream stopped after multiple reconnects: ${reason}`);
-        setStatus("Playback failed");
+        setStatus(`Playback failed: ${reason}`);
         return;
       }
 
       recoveryCountRef.current += 1;
       loadingRef.current = true;
-      setLoading(true);
-      setError(null);
       setStatus(`Trying another stream route (${recoveryCountRef.current}/8): ${reason}`);
 
       reconnectTimerRef.current = window.setTimeout(() => {
@@ -401,9 +395,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         return;
       }
 
-      setLoading(true);
       loadingRef.current = true;
-      setError(null);
       setStatus("Preparing stream...");
 
       video.muted = true;
@@ -429,8 +421,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
           if (!cancelled) {
             loadingRef.current = false;
-            setLoading(false);
-            setError(null);
             setStatus(`${strategy.label} connected`);
           }
           return;
@@ -442,9 +432,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
       if (!cancelled) {
         loadingRef.current = false;
-        setLoading(false);
-        setError(lastError);
-        setStatus("Playback failed");
+        setStatus(`Playback failed: ${lastError}`);
       }
     }
 
@@ -541,44 +529,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     <div className="player-shell livezone-player">
       <div className="player-video-frame">
         <video ref={videoRef} className="player-video" autoPlay muted controls playsInline preload="metadata" />
-        <div className="player-live-banner">
-          <span className={`live-indicator ${error ? "status-error" : "status-live"}`}>
-            <span className="pulse" />
-            {error ? "Stream issue" : "Live channel"}
-          </span>
-        </div>
-        {loading ? (
-          <div className="player-overlay">
-            <div className="player-overlay-card">
-              <RefreshCw className="spin" size={28} />
-              <div className="player-overlay-copy">
-                <strong>Preparing live stream</strong>
-                <p>{status}</p>
-              </div>
-            </div>
-          </div>
-        ) : null}
-        {error ? (
-          <div className="player-overlay">
-            <div className="player-overlay-card player-error-card">
-              <AlertTriangle size={30} />
-              <div className="player-overlay-copy">
-                <strong>Playback needs another attempt</strong>
-                <p>{error}</p>
-                <p>{status}</p>
-              </div>
-              <div className="player-error-actions">
-                <button className="primary-button" onClick={() => setPlaybackNonce((value) => value + 1)} type="button">
-                  <RefreshCw size={16} />
-                  Retry stream
-                </button>
-                <a className="secondary-button" href={channel.streamUrl} rel="noreferrer" target="_blank">
-                  Open source
-                </a>
-              </div>
-            </div>
-          </div>
-        ) : null}
       </div>
 
       <div className="player-footer">
@@ -598,39 +548,10 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           border-radius: var(--radius-xl);
         }
 
-        .player-error-card {
-          border-color: rgba(255, 107, 95, 0.26);
-          background:
-            radial-gradient(circle at top, rgba(255, 107, 95, 0.12), transparent 42%),
-            rgba(7, 13, 21, 0.9);
-        }
-
-        .player-error-card :global(svg) {
-          color: var(--danger);
-        }
-
-        .player-error-actions {
-          display: flex;
-          flex-wrap: wrap;
-          justify-content: center;
-          gap: 0.75rem;
-        }
-
         .player-controls-hint {
           display: inline-flex;
           align-items: center;
           gap: 0.55rem;
-        }
-
-        @media (max-width: 720px) {
-          .player-error-actions {
-            width: 100%;
-          }
-
-          .player-error-actions :global(.primary-button),
-          .player-error-actions :global(.secondary-button) {
-            width: 100%;
-          }
         }
       `}</style>
     </div>
