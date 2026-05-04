@@ -53,6 +53,8 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const retryTimerRef = useRef<number | null>(null);
   const loadTimeoutRef = useRef<number | null>(null);
   const bufferRecoveryTimerRef = useRef<number | null>(null);
+  const mediaProbeTimerRef = useRef<number | null>(null);
+  const mediaListenerCleanupRef = useRef<(() => void) | null>(null);
   const retryCountRef = useRef(0);
   const channelKeyRef = useRef("");
   const sourceIndexRef = useRef(0);
@@ -95,10 +97,27 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       }
     }
 
+    function clearMediaProbeTimer() {
+      if (mediaProbeTimerRef.current !== null) {
+        window.clearTimeout(mediaProbeTimerRef.current);
+        mediaProbeTimerRef.current = null;
+      }
+    }
+
+    function clearMediaListeners() {
+      clearMediaProbeTimer();
+
+      if (mediaListenerCleanupRef.current) {
+        mediaListenerCleanupRef.current();
+        mediaListenerCleanupRef.current = null;
+      }
+    }
+
     function destroyPlayer() {
       clearRetryTimer();
       clearLoadTimeout();
       clearBufferRecoveryTimer();
+      clearMediaListeners();
 
       if (playerRef.current) {
         try {
@@ -187,6 +206,79 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         return;
       }
 
+      function markPlaybackActive(nextStatus = "Playing") {
+        clearLoadTimeout();
+        clearBufferRecoveryTimer();
+        hasStartedRef.current = true;
+        retryCountRef.current = 0;
+        setStatus(nextStatus);
+        setIsLoading(false);
+      }
+
+      function attachMediaElementListeners(sourceCount: number) {
+        clearMediaListeners();
+
+        const video = playerHostRef.current?.querySelector("video");
+
+        if (!video) {
+          mediaProbeTimerRef.current = window.setTimeout(() => {
+            mediaProbeTimerRef.current = null;
+
+            if (!disposed) {
+              attachMediaElementListeners(sourceCount);
+            }
+          }, 250);
+          return;
+        }
+
+        let lastPlaybackTime = video.currentTime;
+
+        const handlePlayable = () => {
+          if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+            markPlaybackActive("Playing");
+          }
+        };
+
+        const handleTimeUpdate = () => {
+          const moved = Math.abs(video.currentTime - lastPlaybackTime) > 0.05;
+          lastPlaybackTime = video.currentTime;
+
+          if (moved || video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+            markPlaybackActive("Playing");
+          }
+        };
+
+        const handleWaiting = () => {
+          if (hasStartedRef.current) {
+            scheduleBufferRecovery(sourceCount);
+            return;
+          }
+
+          setStatus("Buffering");
+          setIsLoading(true);
+        };
+
+        const handleMediaError = () => {
+          scheduleRetry(sourceCount);
+        };
+
+        video.addEventListener("playing", handlePlayable);
+        video.addEventListener("canplay", handlePlayable);
+        video.addEventListener("timeupdate", handleTimeUpdate);
+        video.addEventListener("waiting", handleWaiting);
+        video.addEventListener("stalled", handleWaiting);
+        video.addEventListener("error", handleMediaError);
+
+        mediaListenerCleanupRef.current = () => {
+          video.removeEventListener("playing", handlePlayable);
+          video.removeEventListener("canplay", handlePlayable);
+          video.removeEventListener("timeupdate", handleTimeUpdate);
+          video.removeEventListener("waiting", handleWaiting);
+          video.removeEventListener("stalled", handleWaiting);
+          video.removeEventListener("error", handleMediaError);
+        };
+      }
+
       try {
         const [clapprImport, hlsjsPlaybackImport] = await Promise.all([
           import("@clappr/player"),
@@ -218,12 +310,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
               {
                 eventName: HLS_FRAG_BUFFERED_EVENT,
                 callback: () => {
-                  clearLoadTimeout();
-                  clearBufferRecoveryTimer();
-                  hasStartedRef.current = true;
-                  retryCountRef.current = 0;
-                  setStatus("Playing");
-                  setIsLoading(false);
+                  markPlaybackActive("Playing");
                 },
               },
               {
@@ -283,6 +370,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         });
 
         playerRef.current = player;
+        attachMediaElementListeners(sources.length);
 
         const events = Clappr.Events ?? {};
         const readyEvent = events.PLAYER_READY ?? events.CORE_READY ?? "ready";
@@ -292,20 +380,11 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         const errorEvent = events.PLAYER_ERROR ?? events.CORE_ERROR ?? "error";
 
         const handleReady = () => {
-          clearLoadTimeout();
-          clearBufferRecoveryTimer();
-          hasStartedRef.current = true;
-          setStatus("Live");
-          setIsLoading(false);
-          retryCountRef.current = 0;
+          setStatus("Preparing stream");
         };
 
         const handlePlay = () => {
-          clearLoadTimeout();
-          clearBufferRecoveryTimer();
-          hasStartedRef.current = true;
-          setStatus("Playing");
-          setIsLoading(false);
+          setStatus("Starting playback");
         };
 
         const handleBuffering = () => {
@@ -317,11 +396,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         };
 
         const handleBufferFull = () => {
-          clearLoadTimeout();
-          clearBufferRecoveryTimer();
-          hasStartedRef.current = true;
-          setStatus("Playing");
-          setIsLoading(false);
+          markPlaybackActive("Playing");
         };
 
         const handleError = (..._args: unknown[]) => {

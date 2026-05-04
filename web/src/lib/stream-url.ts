@@ -1,7 +1,7 @@
 export const HLS_MIME_TYPE = "application/vnd.apple.mpegurl";
 
-const IPTV_PROXY_URL = process.env.NEXT_PUBLIC_IPTV_PROXY_URL?.trim().replace(/\/$/, "") || "";
-const LIVEZONE_PROXY_BASE = "https://live-zone.onrender.com/proxy";
+const IPTV_PROXY_URL = normalizeConfiguredProxyBase(process.env.NEXT_PUBLIC_IPTV_PROXY_URL || "");
+const LIVEZONE_PROXY_BASE = normalizeConfiguredProxyBase("https://live-zone.onrender.com");
 
 const XTREAM_LIVE_STREAM_PATTERN =
   /^(https?:\/\/.+\/live\/[^/]+\/[^/]+\/[^/.?]+)(?:\.(?:m3u8|ts|m2ts|flv))?(\?.*)?$/i;
@@ -19,11 +19,26 @@ function getProductionProxyBase(): string {
 }
 
 function normalizeConfiguredProxyBase(proxyUrl: string): string {
-  return proxyUrl;
+  const normalized = proxyUrl.trim().replace(/\/$/, "");
+
+  if (!normalized) {
+    return "";
+  }
+
+  if (
+    normalized.endsWith("/proxy") ||
+    normalized.endsWith("/api/proxy") ||
+    normalized.endsWith("/.netlify/functions/proxy")
+  ) {
+    return normalized;
+  }
+
+  return `${normalized}/proxy`;
 }
 
 export function proxy(url: string): string {
-  return `${LIVEZONE_PROXY_BASE}?url=${encodeURIComponent(url)}`;
+  const proxyBase = getIptvProxyBase() || LIVEZONE_PROXY_BASE;
+  return `${proxyBase}?url=${encodeURIComponent(url)}`;
 }
 
 export function getFinalUrl(url: string): string {
@@ -74,20 +89,20 @@ export function getClapprSourceCandidates(streamUrl: string): string[] {
 
 export function getIptvProxyBases(): string[] {
   if (typeof window === "undefined") {
-    return [LIVEZONE_PROXY_BASE, IPTV_PROXY_URL ? normalizeConfiguredProxyBase(IPTV_PROXY_URL) : ""].filter(Boolean);
+    return [IPTV_PROXY_URL, LIVEZONE_PROXY_BASE].filter(Boolean);
   }
 
   const host = window.location.hostname;
 
   if (isLocalHost(host)) {
-    return ["http://localhost:8787/proxy"];
+    return ["http://localhost:8787/proxy", IPTV_PROXY_URL, LIVEZONE_PROXY_BASE].filter(Boolean);
   }
 
   const bases = [
-    LIVEZONE_PROXY_BASE,
-    IPTV_PROXY_URL ? normalizeConfiguredProxyBase(IPTV_PROXY_URL) : "",
-    `${window.location.origin}/.netlify/functions/proxy`,
+    IPTV_PROXY_URL,
     getProductionProxyBase(),
+    `${window.location.origin}/.netlify/functions/proxy`,
+    LIVEZONE_PROXY_BASE,
   ];
 
   return bases.filter((base, index, array) => base && array.indexOf(base) === index);
