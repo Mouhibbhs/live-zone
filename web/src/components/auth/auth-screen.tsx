@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { signInWithEmailAndPassword } from "firebase/auth";
-import { AlertCircle, ArrowRight, LockKeyhole, Mail, UserRound } from "lucide-react";
+import { AlertCircle, ArrowRight, Download, LockKeyhole, Mail, UserRound } from "lucide-react";
 import { useState } from "react";
 
 import { registerViewerAccount } from "@/lib/api";
@@ -92,6 +92,11 @@ export function AuthScreen({ onError }: AuthScreenProps) {
             Register
           </button>
         </div>
+
+        <a className="secondary-button mobile-download-link" download href="/livezone-mobile.apk">
+          <Download size={16} />
+          Get mobile app
+        </a>
 
         <form className="auth-form" onSubmit={handleSubmit}>
           {mode === "register" ? (

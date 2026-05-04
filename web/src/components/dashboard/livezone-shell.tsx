@@ -2,7 +2,7 @@
 
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import Image from "next/image";
-import { LayoutGrid, LogOut, Radio, RefreshCw, Shield } from "lucide-react";
+import { Download, LayoutGrid, LogOut, Radio, RefreshCw, Shield } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { AuthScreen } from "@/components/auth/auth-screen";
@@ -260,6 +260,11 @@ export function LiveZoneShell() {
             <RefreshCw size={16} />
             {requestBusy ? "Syncing..." : "Sync"}
           </button>
+
+          <a className="secondary-button mobile-download-link" download href="/livezone-mobile.apk">
+            <Download size={16} />
+            Get mobile app
+          </a>
 
           <button className="secondary-button" onClick={handleSignOut} type="button">
             <LogOut size={16} />

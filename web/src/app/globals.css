@@ -184,7 +184,8 @@ a {
     min-width: 0;
     min-height: 46px;
     padding: .8rem 1.1rem;
-    text-align: center
+    text-align: center;
+    text-decoration: none
 }
 
 .favorite-row,.icon-button,.secondary-button,.segment {
@@ -204,6 +205,10 @@ a {
 .primary-button {
     background: linear-gradient(135deg,var(--accent),var(--accent-strong));
     color: white
+}
+
+.mobile-download-link {
+    width: fit-content
 }
 
 .danger-button {
@@ -940,7 +945,7 @@ a {
         width: 100%
     }
 
-    .inline-form>button,.selected-channel-actions>button,.topbar-actions>button,.viewer-toolbar-actions>button {
+    .inline-form>button,.selected-channel-actions>button,.topbar-actions>a,.topbar-actions>button,.viewer-toolbar-actions>button {
         flex: 1 1 180px
     }
 
@@ -1021,7 +1026,7 @@ a {
         width: 100%
     }
 
-    .auth-switch>button,.topbar-actions>button,.viewer-toolbar-actions>button {
+    .auth-switch>button,.topbar-actions>a,.topbar-actions>button,.viewer-toolbar-actions>button {
         width: 100%;
         min-height: 42px;
         padding: .68rem .72rem
@@ -1144,7 +1149,7 @@ a {
         white-space: normal
     }
 
-    .inline-form>button,.player-controls-hint,.selected-channel-actions>button,.topbar-actions>button,.viewer-toolbar-actions>button {
+    .inline-form>button,.player-controls-hint,.selected-channel-actions>button,.topbar-actions>a,.topbar-actions>button,.viewer-toolbar-actions>button {
         width: 100%
     }
 
