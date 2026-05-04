@@ -25,6 +25,13 @@ const MIME_TYPES = {
   ".mp3": "audio/mpeg",
 };
 
+const DEFAULT_UPSTREAM_USER_AGENTS = [
+  "VLC/3.0.20 LibVLC/3.0.20",
+  "IPTVSmartersPlayer",
+  "TiviMate/4.7.0 (Linux; Android 11)",
+  "Lavf/60.16.100",
+];
+
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
@@ -79,15 +86,29 @@ function rewritePlaylist(req, playlistText, targetUrl) {
     .join("\n");
 }
 
-function buildUpstreamHeaders(req, target) {
+function getUpstreamUserAgents() {
+  const configured = process.env.UPSTREAM_USER_AGENT || process.env.UPSTREAM_USER_AGENTS || "";
+  const userAgents = configured
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  return userAgents.length > 0 ? userAgents : DEFAULT_UPSTREAM_USER_AGENTS;
+}
+
+function buildUpstreamHeaders(req, target, userAgent) {
   const headers = {
-    "User-Agent":
-      req.headers["user-agent"] ||
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    Accept: req.headers.accept || "*/*",
-    "Accept-Language": req.headers["accept-language"] || "en-US,en;q=0.9",
-    Referer: target.origin,
+    Host: target.host,
+    "User-Agent": userAgent,
+    Accept: "*/*",
+    "Icy-MetaData": "1",
+    "Cache-Control": "no-cache",
+    Pragma: "no-cache",
   };
+
+  if (process.env.UPSTREAM_REFERER) {
+    headers.Referer = process.env.UPSTREAM_REFERER;
+  }
 
   if (req.headers.range) {
     headers.Range = req.headers.range;
@@ -150,7 +171,7 @@ function handlePlaylist(req, res, upstream, targetUrl, firstChunk) {
   });
 }
 
-function proxyRequest(req, res, targetUrl, redirectCount = 0) {
+function proxyRequest(req, res, targetUrl, redirectCount = 0, userAgentIndex = 0) {
   let target;
 
   try {
@@ -162,6 +183,8 @@ function proxyRequest(req, res, targetUrl, redirectCount = 0) {
   }
 
   const client = target.protocol === "https:" ? https : http;
+  const userAgents = getUpstreamUserAgents();
+  const userAgent = userAgents[userAgentIndex] || userAgents[0];
   const upstreamReq = client.request(
     {
       protocol: target.protocol,
@@ -169,7 +192,7 @@ function proxyRequest(req, res, targetUrl, redirectCount = 0) {
       port: target.port || (target.protocol === "https:" ? 443 : 80),
       path: `${target.pathname}${target.search}`,
       method: req.method,
-      headers: buildUpstreamHeaders(req, target),
+      headers: buildUpstreamHeaders(req, target, userAgent),
       timeout: 0,
     },
     (upstream) => {
@@ -188,7 +211,13 @@ function proxyRequest(req, res, targetUrl, redirectCount = 0) {
 
         const redirectedUrl = new URL(upstream.headers.location, targetUrl).toString();
         upstream.resume();
-        proxyRequest(req, res, redirectedUrl, redirectCount + 1);
+        proxyRequest(req, res, redirectedUrl, redirectCount + 1, userAgentIndex);
+        return;
+      }
+
+      if ((upstream.statusCode === 401 || upstream.statusCode === 403) && userAgentIndex < userAgents.length - 1) {
+        upstream.resume();
+        proxyRequest(req, res, targetUrl, redirectCount, userAgentIndex + 1);
         return;
       }
 
@@ -238,7 +267,7 @@ function proxyRequest(req, res, targetUrl, redirectCount = 0) {
     res.end(`Proxy error: ${error.message}`);
   });
 
-  req.pipe(upstreamReq, { end: true });
+  upstreamReq.end();
 }
 
 const server = http.createServer((req, res) => {
@@ -248,6 +277,12 @@ const server = http.createServer((req, res) => {
       "Access-Control-Max-Age": "86400",
     });
     res.end();
+    return;
+  }
+
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.writeHead(405, { ...corsHeaders(), "Content-Type": "text/plain" });
+    res.end("Method not allowed");
     return;
   }
 
