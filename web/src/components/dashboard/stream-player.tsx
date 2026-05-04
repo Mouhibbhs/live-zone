@@ -62,12 +62,7 @@ function buildProxyUrl(proxyBase: string, url: string) {
 }
 
 function shouldTryDirectPlayback(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  const host = window.location.hostname;
-  return host === "localhost" || host === "127.0.0.1";
+  return false;
 }
 
 function shouldTryContinuousMpegTs(): boolean {
@@ -161,11 +156,12 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         return;
       }
 
+      // Only permanently skip strategy on hard failures, not transient stalls
       if (skipCurrentStrategy && currentStrategyRef.current) {
         skippedStrategyUrlsRef.current.add(currentStrategyRef.current.url);
       }
 
-      if (recoveryCountRef.current >= 8) {
+      if (recoveryCountRef.current >= 10) {
         loadingRef.current = false;
         setStatus(`Playback failed: ${reason}`);
         return;
@@ -173,12 +169,13 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
       recoveryCountRef.current += 1;
       loadingRef.current = true;
-      setStatus(`Trying another stream route (${recoveryCountRef.current}/8): ${reason}`);
+      setStatus(`Recovering stream (${recoveryCountRef.current}/10): ${reason}`);
 
+      // Longer delay before retry to let network settle
       reconnectTimerRef.current = window.setTimeout(() => {
         reconnectTimerRef.current = null;
         setPlaybackNonce((value) => value + 1);
-      }, 1200);
+      }, 2000);
     }
 
     function cleanup() {
@@ -220,22 +217,34 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         const hls = new Hls({
           enableWorker: true,
           lowLatencyMode: false,
-          liveSyncDurationCount: 4,
-          liveMaxLatencyDurationCount: 8,
-          maxBufferLength: 90,
-          maxMaxBufferLength: 180,
-          backBufferLength: 120,
+
+          // FIX: More generous live sync — prevents constant re-syncing to live edge
+          liveSyncDurationCount: 6,
+          liveMaxLatencyDurationCount: 12,
+
+          // FIX: Larger buffer — absorbs IPTV jitter without triggering stalls
+          maxBufferLength: 120,
+          maxMaxBufferLength: 240,
+
+          // FIX: Reduced back buffer — saves memory, live streams don't need it
+          backBufferLength: 30,
+
           liveDurationInfinity: true,
-          maxLiveSyncPlaybackRate: 1.1,
-          manifestLoadingMaxRetry: 8,
-          manifestLoadingRetryDelay: 1000,
-          manifestLoadingMaxRetryTimeout: 8000,
-          levelLoadingMaxRetry: 8,
-          levelLoadingRetryDelay: 1000,
-          levelLoadingMaxRetryTimeout: 8000,
-          fragLoadingMaxRetry: 8,
-          fragLoadingRetryDelay: 1000,
-          fragLoadingMaxRetryTimeout: 8000,
+
+          // FIX: Slightly higher playback rate ceiling for live catch-up
+          maxLiveSyncPlaybackRate: 1.15,
+
+          // FIX: More retries with longer timeouts for unstable IPTV sources
+          manifestLoadingMaxRetry: 10,
+          manifestLoadingRetryDelay: 2000,
+          manifestLoadingMaxRetryTimeout: 16000,
+          levelLoadingMaxRetry: 10,
+          levelLoadingRetryDelay: 2000,
+          levelLoadingMaxRetryTimeout: 16000,
+          fragLoadingMaxRetry: 10,
+          fragLoadingRetryDelay: 2000,
+          fragLoadingMaxRetryTimeout: 16000,
+
           startFragPrefetch: true,
           abrEwmaFastLive: 3,
           abrEwmaSlowLive: 9,
@@ -257,6 +266,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           resolve();
         };
 
+        // FIX: Increased initial timeout — cold Render proxy needs time to wake up
         const timeoutId = window.setTimeout(() => {
           if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA || video.buffered.length > 0) {
             settleSuccess();
@@ -264,7 +274,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           }
 
           reject(new Error(`${strategy.label} timed out.`));
-        }, 18000);
+        }, 30000);
 
         video.addEventListener("playing", settleSuccess, { once: true });
         video.addEventListener("canplay", settleSuccess, { once: true });
@@ -280,18 +290,21 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           if (data.fatal) {
             if (started) {
               if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                setStatus(`${strategy.label} network recovered`);
+                // FIX: Don't skip strategy on network errors — retry same route
+                setStatus(`${strategy.label} network error, recovering...`);
                 hls.startLoad();
                 return;
               }
 
               if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-                setStatus(`${strategy.label} media recovered`);
+                // FIX: Don't skip strategy on media errors — try recovery first
+                setStatus(`${strategy.label} media error, recovering...`);
                 hls.recoverMediaError();
                 return;
               }
 
-              scheduleRecovery(data.details || "fatal HLS error");
+              // Only skip on truly unrecoverable errors
+              scheduleRecovery(data.details || "fatal HLS error", true);
               return;
             }
 
@@ -334,10 +347,15 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           {
             enableWorker: true,
             enableStashBuffer: true,
-            stashInitialSize: 4096,
+            stashInitialSize: 8192,
+
+            // FIX: Much more tolerant latency window — stops aggressive live-edge chasing
             liveBufferLatencyChasing: true,
-            liveBufferLatencyMaxLatency: 30,
-            liveBufferLatencyMinLatency: 8,
+            liveBufferLatencyMaxLatency: 90,
+            liveBufferLatencyMinLatency: 20,
+
+            // FIX: Larger IO buffer for absorbing IPTV jitter
+            ioBufferSize: 1048576,
           },
         );
 
@@ -357,6 +375,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           resolve();
         };
 
+        // FIX: Increased initial timeout
         const timeoutId = window.setTimeout(() => {
           if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA || video.buffered.length > 0) {
             settleSuccess();
@@ -364,7 +383,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           }
 
           reject(new Error(`${strategy.label} timed out.`));
-        }, 18000);
+        }, 30000);
 
         video.addEventListener("playing", settleSuccess, { once: true });
         video.addEventListener("canplay", settleSuccess, { once: true });
@@ -373,7 +392,8 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         player.on(lib.Events.ERROR, (...args: unknown[]) => {
           const detail = typeof args[1] === "string" ? args[1] : "mpegts error";
           if (started) {
-            scheduleRecovery(detail);
+            // FIX: Don't skip strategy on transient errors — retry same route
+            scheduleRecovery(detail, false);
             return;
           }
 
@@ -421,6 +441,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
           if (!cancelled) {
             loadingRef.current = false;
+            recoveryCountRef.current = 0; // FIX: Reset recovery count on successful connect
             setStatus(`${strategy.label} connected`);
           }
           return;
@@ -462,6 +483,8 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
     let stalledTicks = 0;
     let lastCurrentTime = video.currentTime;
+
+    // FIX: Monitor runs every 8s instead of 5s — less sensitive to short natural pauses
     const monitorId = window.setInterval(() => {
       if (!video || cancelled || video.paused || loadingRef.current) {
         stalledTicks = 0;
@@ -472,7 +495,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       const bufferedAhead = getBufferedAhead();
       const progressed = Math.abs(video.currentTime - lastCurrentTime) > 0.15;
 
-      if (progressed || bufferedAhead > 2) {
+      if (progressed || bufferedAhead > 3) {
         stalledTicks = 0;
       } else {
         stalledTicks += 1;
@@ -480,22 +503,26 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
       lastCurrentTime = video.currentTime;
 
-      if (stalledTicks >= 3) {
+      // FIX: 6 ticks × 8s = 48 seconds before declaring a stall (was 15s before)
+      // FIX: false = don't permanently skip strategy on transient stalls
+      if (stalledTicks >= 6) {
         stalledTicks = 0;
-        scheduleRecovery("buffer stopped");
+        scheduleRecovery("buffer stopped", false);
       }
-    }, 5000);
+    }, 8000);
 
     const onWaiting = () => {
       window.setTimeout(() => {
         if (!cancelled && video && !video.paused && video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
-          scheduleRecovery("waiting for data");
+          // FIX: false = don't skip strategy just because of a waiting event
+          scheduleRecovery("waiting for data", false);
         }
-      }, 10000);
+        // FIX: 25s timeout instead of 10s — IPTV streams legitimately pause before segments
+      }, 25000);
     };
 
-    const onEnded = () => scheduleRecovery("stream ended");
-    const onVideoError = () => scheduleRecovery(video.error?.message || "video error");
+    const onEnded = () => scheduleRecovery("stream ended", true);
+    const onVideoError = () => scheduleRecovery(video.error?.message || "video error", true);
 
     video.addEventListener("waiting", onWaiting);
     video.addEventListener("stalled", onWaiting);
