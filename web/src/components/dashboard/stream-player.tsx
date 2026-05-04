@@ -130,7 +130,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const hlsRef = useRef<Hls | null>(null);
   const mpegtsRef = useRef<MpegtsPlayer | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
-  const streamRefreshTimerRef = useRef<number | null>(null);
   const recoveryCountRef = useRef(0);
   const loadingRef = useRef(false);
   const currentStrategyRef = useRef<Strategy | null>(null);
@@ -156,13 +155,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       if (reconnectTimerRef.current) {
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
-      }
-    }
-
-    function clearStreamRefreshTimer() {
-      if (streamRefreshTimerRef.current) {
-        window.clearTimeout(streamRefreshTimerRef.current);
-        streamRefreshTimerRef.current = null;
       }
     }
 
@@ -197,7 +189,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
     function cleanup() {
       clearReconnectTimer();
-      clearStreamRefreshTimer();
 
       if (hlsRef.current) {
         hlsRef.current.destroy();
@@ -441,12 +432,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
             setLoading(false);
             setError(null);
             setStatus(`${strategy.label} connected`);
-
-            if (strategy.kind === "mpegts" && !shouldTryDirectPlayback()) {
-              streamRefreshTimerRef.current = window.setTimeout(() => {
-                scheduleRecovery("refreshing MPEG-TS connection", false);
-              }, 24000);
-            }
           }
           return;
         } catch (attemptError) {
