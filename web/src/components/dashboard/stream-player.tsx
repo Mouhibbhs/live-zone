@@ -223,11 +223,11 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           liveMaxLatencyDurationCount: 12,
 
           // FIX: Larger buffer — absorbs IPTV jitter without triggering stalls
-          maxBufferLength: 120,
-          maxMaxBufferLength: 240,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 30,
 
           // FIX: Reduced back buffer — saves memory, live streams don't need it
-          backBufferLength: 30,
+          backBufferLength: 10,
 
           liveDurationInfinity: true,
 
