@@ -151,7 +151,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       }
     }
 
-    function scheduleRecovery(reason: string, skipCurrentStrategy = true) {
+    function scheduleRecovery(reason: string, skipCurrentStrategy = false) {
       if (cancelled || reconnectTimerRef.current) {
         return;
       }
@@ -223,8 +223,8 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           liveMaxLatencyDurationCount: 12,
 
           // FIX: Larger buffer — absorbs IPTV jitter without triggering stalls
-          maxBufferLength: 600,
-          maxMaxBufferLength: 600,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 30,
 
           // FIX: Reduced back buffer — saves memory, live streams don't need it
           backBufferLength: 10,
@@ -351,8 +351,8 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
             // FIX: Much more tolerant latency window — stops aggressive live-edge chasing
             liveBufferLatencyChasing: true,
-            liveBufferLatencyMaxLatency: 10,
-            liveBufferLatencyMinLatency: 4,
+            liveBufferLatencyMaxLatency: 90,
+            liveBufferLatencyMinLatency: 20,
 
             // FIX: Larger IO buffer for absorbing IPTV jitter
             ioBufferSize: 1048576,
