@@ -74,7 +74,16 @@ export function normalizeLiveStreamUrl(streamUrl: string, ext: "ts" | "m3u8" = "
 }
 
 export function isHlsPlaylistUrl(streamUrl: string): boolean {
-  return streamUrl.split("?")[0].trim().toLowerCase().endsWith(".m3u8");
+  // The player may receive a proxied URL (e.g. http://site/.netlify/functions/proxy?url=...)
+  // In that case we need to inspect the original `url` query parameter to determine the
+  // actual media type. If the URL is not proxied we fall back to a simple extension check.
+  try {
+    const u = new URL(streamUrl);
+    const real = u.searchParams.get('url') ?? streamUrl;
+    return real.split('?')[0].trim().toLowerCase().endsWith('.m3u8');
+  } catch {
+    return streamUrl.split('?')[0].trim().toLowerCase().endsWith('.m3u8');
+  }
 }
 
 export function isMpegTsUrl(streamUrl: string): boolean {
