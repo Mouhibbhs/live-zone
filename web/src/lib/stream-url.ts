@@ -34,7 +34,6 @@ export function getIptvProxyBases(): string[] {
 
   const bases = [
     IPTV_PROXY_URL ? normalizeConfiguredProxyBase(IPTV_PROXY_URL) : "",
-    `${window.location.origin}/api/proxy`,
   ];
 
   return bases.filter((base, index, array) => base && array.indexOf(base) === index);
