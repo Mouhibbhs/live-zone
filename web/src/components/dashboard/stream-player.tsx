@@ -70,43 +70,29 @@ function shouldTryContinuousMpegTs(): boolean {
 }
 
 function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()): Strategy[] {
-  const directHls = buildDirectUrl(streamUrl, "m3u8");
+  // Only use the MPEG‑TS proxy strategy; all other methods (HLS, direct URLs, fallbacks) are omitted.
   const directTs = buildDirectUrl(streamUrl, "ts");
   const proxyBases = getIptvProxyBases();
 
   const strategies: Strategy[] = [];
 
+  // Create a single MPEG‑TS proxy strategy (or fallback if multiple bases exist).
   proxyBases.forEach((proxyBase, index) => {
     strategies.push({
-      kind: "hls",
-      label: index === 0 ? "Proxy HLS" : `Proxy HLS fallback ${index}`,
-      url: buildProxyUrl(proxyBase, directHls),
+      kind: "mpegts",
+      label: index === 0 ? "Proxy MPEG-TS" : `Proxy MPEG-TS fallback ${index}`,
+      url: buildProxyUrl(proxyBase, directTs),
     });
   });
 
-  if (shouldTryContinuousMpegTs()) {
-    proxyBases.forEach((proxyBase, index) => {
-      strategies.push({
-        kind: "mpegts",
-        label: index === 0 ? "Proxy MPEG-TS" : `Proxy MPEG-TS fallback ${index}`,
-        url: buildProxyUrl(proxyBase, directTs),
-      });
-    });
-  }
-
-  if (shouldTryDirectPlayback() && directHls) {
-    strategies.push({ kind: "hls", label: "Direct HLS", url: directHls });
-  }
-
-  if (shouldTryDirectPlayback() && shouldTryContinuousMpegTs() && directTs) {
-    strategies.push({ kind: "mpegts", label: "Direct MPEG-TS", url: directTs });
-  }
+  // No HLS or direct playback strategies are added.
 
   const uniqueStrategies = strategies.filter(
-    (item, index, array) => item.url && array.findIndex((entry) => entry.url === item.url) === index,
+    (item, idx, arr) => item.url && arr.findIndex((e) => e.url === item.url) === idx,
   );
-  const availableStrategies = uniqueStrategies.filter((strategy) => !skippedUrls.has(strategy.url));
+  const availableStrategies = uniqueStrategies.filter((s) => !skippedUrls.has(s.url));
 
+  // Return the list (will contain only MPEG‑TS proxy entries).
   return availableStrategies.length > 0 ? availableStrategies : uniqueStrategies;
 }
 
