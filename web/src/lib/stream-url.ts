@@ -18,7 +18,8 @@ function getProductionProxyBase(): string {
 }
 
 function normalizeConfiguredProxyBase(proxyUrl: string): string {
-  return proxyUrl;
+  // Ensure the URL ends with /proxy so the proxy endpoint is used correctly
+  return proxyUrl.replace(/\/+$/,'').replace(/(\/proxy)?$/,'/proxy');
 }
 
 export function getIptvProxyBases(): string[] {
