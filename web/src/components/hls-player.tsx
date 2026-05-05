@@ -44,16 +44,16 @@ export function HLSPlayer({ channel, onError, className = "" }: HLSPlayerProps) 
     if (Hls.isSupported()) {
       const hls = new Hls({
         enableWorker: true,
-        lowLatencyMode: true,
-        liveSyncDurationCount: 3,
-        liveMaxLatencyDurationCount: 6,
-        maxBufferLength: 30,
-        maxMaxBufferLength: 60,
-        backBufferLength: 90,
-        maxFragLookUpTolerance: 0.25,
+        lowLatencyMode: false,
+        liveSyncDurationCount: 1,
+        liveMaxLatencyDurationCount: 4,
+        maxBufferLength: 12,
+        maxMaxBufferLength: 20,
+        backBufferLength: 30,
+        maxFragLookUpTolerance: 0.15,
         liveDurationInfinity: true,
-        abrEwmaFastLive: 3,
-        abrEwmaSlowLive: 9,
+        abrEwmaFastLive: 2,
+        abrEwmaSlowLive: 6,
       });
 
       hlsRef.current = hls;
