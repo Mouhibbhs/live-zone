@@ -14,6 +14,17 @@ function getProductionProxyBase(): string {
     return "";
   }
 
+  // When deployed on Netlify, use the Netlify function proxy path.
+  // Netlify functions are accessible under `/.netlify/functions/<function-name>`.
+  // The original server proxy was mounted at `/api/proxy` in the Next.js app.
+  // Netlify creates a function named `proxy` that mirrors this endpoint.
+  // Detect Netlify deployment via the hostname pattern (ends with `.netlify.app`).
+  const host = window.location.hostname;
+  if (host.endsWith(".netlify.app")) {
+    return `${window.location.origin}/.netlify/functions/proxy`;
+  }
+
+  // Default to the Next.js API route when not on Netlify.
   return `${window.location.origin}/api/proxy`;
 }
 
@@ -29,14 +40,29 @@ export function getIptvProxyBases(): string[] {
 
   const host = window.location.hostname;
 
+  // Development environment on localhost uses the local proxy server.
   if (isLocalHost(host)) {
     return ["http://localhost:8787/proxy"];
   }
 
-  const bases = [
-    IPTV_PROXY_URL ? normalizeConfiguredProxyBase(IPTV_PROXY_URL) : "",
-  ];
+  const bases: string[] = [];
 
+  // Include user‑configured proxy URL if provided.
+  if (IPTV_PROXY_URL) {
+    bases.push(normalizeConfiguredProxyBase(IPTV_PROXY_URL));
+  }
+
+  // When deployed on Netlify, use the Netlify function proxy.
+  if (host.endsWith('.netlify.app')) {
+    const netlifyProxy = getProductionProxyBase();
+    if (netlifyProxy) bases.push(netlifyProxy);
+  }
+
+  // Fallback to the default Next.js API proxy when not on Netlify.
+  const defaultProxy = `${window.location.origin}/api/proxy`;
+  if (defaultProxy) bases.push(defaultProxy);
+
+  // Remove duplicates and empty strings.
   return bases.filter((base, index, array) => base && array.indexOf(base) === index);
 }
 
