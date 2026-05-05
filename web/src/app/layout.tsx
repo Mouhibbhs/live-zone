@@ -11,7 +11,6 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="en">
       <head>
-        <script src="https://cdn.jsdelivr.net/npm/mpegts.js@latest/dist/mpegts.min.js" />
       </head>
       <body>{children}</body>
     </html>
