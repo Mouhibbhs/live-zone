@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
 
 import type { LiveChannel } from "@/lib/types";
-import { getIptvProxyBases } from "@/lib/stream-url";
+import { getIptvProxyBases, isHlsPlaylistUrl } from "@/lib/stream-url";
 
 type MpegtsPlayer = {
   attachMediaElement(mediaElement: HTMLMediaElement): void;
@@ -61,8 +61,9 @@ function buildProxyUrl(proxyBase: string, url: string) {
   return proxyBase ? `${proxyBase}?url=${encodeURIComponent(url)}` : "";
 }
 
-function shouldTryDirectPlayback(): boolean {
-  return false;
+function shouldTryDirectPlayback(streamUrl: string): boolean {
+  // Attempt direct HLS playback when the URL points to an HLS playlist.
+  return isHlsPlaylistUrl(streamUrl);
 }
 
 function shouldTryContinuousMpegTs(): boolean {
@@ -70,43 +71,42 @@ function shouldTryContinuousMpegTs(): boolean {
 }
 
 function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()): Strategy[] {
-  const directHls = buildDirectUrl(streamUrl, "m3u8");
-  const directTs = buildDirectUrl(streamUrl, "ts");
-  const proxyBases = getIptvProxyBases();
-
   const strategies: Strategy[] = [];
 
-  proxyBases.forEach((proxyBase, index) => {
+  // Direct HLS strategy (if the URL points to an HLS playlist).
+  if (shouldTryDirectPlayback(streamUrl)) {
     strategies.push({
       kind: "hls",
-      label: index === 0 ? "Proxy HLS" : `Proxy HLS fallback ${index}`,
-      url: buildProxyUrl(proxyBase, directHls),
+      label: "Direct HLS",
+      url: streamUrl,
+    });
+  }
+
+  // Direct MPEG‑TS strategy (always try the raw .ts URL).
+  const directTs = buildDirectUrl(streamUrl, "ts");
+  strategies.push({
+    kind: "mpegts",
+    label: "Direct MPEG-TS",
+    url: directTs,
+  });
+
+  // Proxy MPEG‑TS strategies.
+  const proxyBases = getIptvProxyBases();
+  proxyBases.forEach((proxyBase, index) => {
+    strategies.push({
+      kind: "mpegts",
+      label: index === 0 ? "Proxy MPEG-TS" : `Proxy MPEG-TS fallback ${index}`,
+      url: buildProxyUrl(proxyBase, directTs),
     });
   });
 
-  if (shouldTryContinuousMpegTs()) {
-    proxyBases.forEach((proxyBase, index) => {
-      strategies.push({
-        kind: "mpegts",
-        label: index === 0 ? "Proxy MPEG-TS" : `Proxy MPEG-TS fallback ${index}`,
-        url: buildProxyUrl(proxyBase, directTs),
-      });
-    });
-  }
-
-  if (shouldTryDirectPlayback() && directHls) {
-    strategies.push({ kind: "hls", label: "Direct HLS", url: directHls });
-  }
-
-  if (shouldTryDirectPlayback() && shouldTryContinuousMpegTs() && directTs) {
-    strategies.push({ kind: "mpegts", label: "Direct MPEG-TS", url: directTs });
-  }
-
+  // Remove duplicates and any URLs that have been skipped.
   const uniqueStrategies = strategies.filter(
-    (item, index, array) => item.url && array.findIndex((entry) => entry.url === item.url) === index,
+    (item, idx, arr) => item.url && arr.findIndex((e) => e.url === item.url) === idx,
   );
-  const availableStrategies = uniqueStrategies.filter((strategy) => !skippedUrls.has(strategy.url));
+  const availableStrategies = uniqueStrategies.filter((s) => !skippedUrls.has(s.url));
 
+  // Return the list (prefer non‑skipped strategies, fallback to all if none left).
   return availableStrategies.length > 0 ? availableStrategies : uniqueStrategies;
 }
 
@@ -125,7 +125,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const hlsRef = useRef<Hls | null>(null);
   const mpegtsRef = useRef<MpegtsPlayer | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
-  const waitingTimerRef = useRef<number | null>(null);
   const recoveryCountRef = useRef(0);
   const loadingRef = useRef(false);
   const currentStrategyRef = useRef<Strategy | null>(null);
@@ -182,10 +181,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     function cleanup() {
       clearReconnectTimer();
 
-      if (waitingTimerRef.current) {
-        window.clearTimeout(waitingTimerRef.current);
-        waitingTimerRef.current = null;
-      }
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
@@ -517,16 +512,12 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     }, 8000);
 
     const onWaiting = () => {
-      // FIX: Cancel previous waiting timer — prevents stacked timers firing multiple recoveries
-      if (waitingTimerRef.current) {
-        window.clearTimeout(waitingTimerRef.current);
-        waitingTimerRef.current = null;
-      }
-      waitingTimerRef.current = window.setTimeout(() => {
-        waitingTimerRef.current = null;
+      window.setTimeout(() => {
         if (!cancelled && video && !video.paused && video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+          // FIX: false = don't skip strategy just because of a waiting event
           scheduleRecovery("waiting for data", false);
         }
+        // FIX: 25s timeout instead of 10s — IPTV streams legitimately pause before segments
       }, 25000);
     };
 
