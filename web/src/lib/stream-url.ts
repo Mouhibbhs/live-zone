@@ -41,20 +41,15 @@ export function getIptvProxyBases(): string[] {
 
   const host = window.location.hostname;
 
-  const bases: string[] = [];
-
-  // Netlify deployment – use the Netlify function proxy.
+  // Netlify deployment – use only the Netlify function proxy.
   if (host.endsWith('.netlify.app')) {
     const netlifyProxy = getProductionProxyBase();
-    if (netlifyProxy) bases.push(netlifyProxy);
+    return netlifyProxy ? [netlifyProxy] : [];
   }
 
-  // Always include the Next.js API proxy as a fallback.
+  // Non‑Netlify environments – use the Next.js API proxy.
   const nextJsProxy = `${window.location.origin}/api/proxy`;
-  if (nextJsProxy) bases.push(nextJsProxy);
-
-  // Remove duplicates and empty entries.
-  return bases.filter((base, index, array) => base && array.indexOf(base) === index);
+  return nextJsProxy ? [nextJsProxy] : [];
 }
 
 export function getIptvProxyBase(): string {
