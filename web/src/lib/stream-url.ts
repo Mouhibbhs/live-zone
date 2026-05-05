@@ -35,34 +35,25 @@ function normalizeConfiguredProxyBase(proxyUrl: string): string {
 
 export function getIptvProxyBases(): string[] {
   if (typeof window === "undefined") {
+    // Server‑side: only use the configured proxy URL if present.
     return IPTV_PROXY_URL ? [normalizeConfiguredProxyBase(IPTV_PROXY_URL)] : [];
   }
 
   const host = window.location.hostname;
 
-  // Development environment on localhost uses the local proxy server.
-  if (isLocalHost(host)) {
-    return ["http://localhost:8787/proxy"];
-  }
-
   const bases: string[] = [];
 
-  // Include user‑configured proxy URL if provided.
-  if (IPTV_PROXY_URL) {
-    bases.push(normalizeConfiguredProxyBase(IPTV_PROXY_URL));
-  }
-
-  // When deployed on Netlify, use the Netlify function proxy.
+  // Netlify deployment – use the Netlify function proxy.
   if (host.endsWith('.netlify.app')) {
     const netlifyProxy = getProductionProxyBase();
     if (netlifyProxy) bases.push(netlifyProxy);
   }
 
-  // Fallback to the default Next.js API proxy when not on Netlify.
-  const defaultProxy = `${window.location.origin}/api/proxy`;
-  if (defaultProxy) bases.push(defaultProxy);
+  // Always include the Next.js API proxy as a fallback.
+  const nextJsProxy = `${window.location.origin}/api/proxy`;
+  if (nextJsProxy) bases.push(nextJsProxy);
 
-  // Remove duplicates and empty strings.
+  // Remove duplicates and empty entries.
   return bases.filter((base, index, array) => base && array.indexOf(base) === index);
 }
 
