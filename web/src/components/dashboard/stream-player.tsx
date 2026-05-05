@@ -481,34 +481,15 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       return 0;
     };
 
-    let stalledTicks = 0;
     let lastCurrentTime = video.currentTime;
 
-    // FIX: Monitor runs every 8s instead of 5s — less sensitive to short natural pauses
+    // Minimal monitor to keep track of playback time without triggering stalls
     const monitorId = window.setInterval(() => {
       if (!video || cancelled || video.paused || loadingRef.current) {
-        stalledTicks = 0;
         lastCurrentTime = video?.currentTime ?? 0;
         return;
       }
-
-      const bufferedAhead = getBufferedAhead();
-      const progressed = Math.abs(video.currentTime - lastCurrentTime) > 0.15;
-
-      if (progressed || bufferedAhead > 3) {
-        stalledTicks = 0;
-      } else {
-        stalledTicks += 1;
-      }
-
       lastCurrentTime = video.currentTime;
-
-      // FIX: 6 ticks × 8s = 48 seconds before declaring a stall (was 15s before)
-      // FIX: false = don't permanently skip strategy on transient stalls
-      if (stalledTicks >= 6) {
-        stalledTicks = 0;
-        scheduleRecovery("buffer stopped", false);
-      }
     }, 8000);
 
     const onWaiting = () => {
