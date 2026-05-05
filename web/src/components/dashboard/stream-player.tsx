@@ -347,7 +347,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           {
             enableWorker: true,
             enableStashBuffer: true,
-            stashInitialSize: 8192,
+            stashInitialSize: 512,
 
             // FIX: Much more tolerant latency window — stops aggressive live-edge chasing
             liveBufferLatencyChasing: true,
