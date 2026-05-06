@@ -127,6 +127,9 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     const video = videoRef.current;
     const channelKey = channel ? `${channel.id}:${channel.streamUrl}` : "";
 
+    // DVR TIMESHIFT CONFIGURATION
+    const LIVE_DELAY = 20; // seconds behind live edge
+
     // FORCE INFINITE DURATION FOR LIVE STREAM
     const forceInfiniteDuration = () => {
       if (!video) return;
@@ -140,22 +143,8 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       }
     };
 
-    const forceLiveEdge = () => {
-      if (!video || video.seekable.length === 0) return;
-      try {
-        const liveEdge = video.seekable.end(0);
-        // Only adjust if drifted more than 30 seconds behind
-        if (liveEdge - video.currentTime > 30) {
-          video.currentTime = liveEdge - 5;
-        }
-      } catch (e) {
-        // Silently fail if seekable isn't available
-      }
-    };
-
     if (video) {
       video.addEventListener('loadedmetadata', forceInfiniteDuration);
-      video.addEventListener('timeupdate', forceLiveEdge);
     }
 
     if (channelKey !== lastChannelKeyRef.current) {
@@ -381,6 +370,55 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
     void startPlayback();
 
+    // DVR TIMESHIFT — keep playback consistently behind live edge
+    const dvrIntervalId = window.setInterval(() => {
+      if (!video || video.paused || cancelled || loadingRef.current) return;
+      
+      try {
+        if (video.seekable.length > 0) {
+          const liveEdge = video.seekable.end(0);
+          const targetTime = liveEdge - LIVE_DELAY;
+          const currentTime = video.currentTime;
+          
+          // Only adjust if we're more than 2 seconds away from target
+          if (Math.abs(currentTime - targetTime) > 2) {
+            // Ensure target is valid
+            if (targetTime > 0 && targetTime < liveEdge) {
+              video.currentTime = targetTime;
+            }
+          }
+        }
+      } catch (e) {
+        // Silently fail if seekable isn't available
+      }
+    }, 3000);
+
+    // PREVENT PLAYING TOO CLOSE TO LIVE EDGE
+    const preventLiveEdgePlayback = () => {
+      if (!video || video.paused || cancelled || loadingRef.current) return;
+      
+      try {
+        if (video.seekable.length > 0) {
+          const liveEdge = video.seekable.end(0);
+          const currentTime = video.currentTime;
+          
+          // If we're too close to live edge (less than LIVE_DELAY - 2 seconds)
+          if (liveEdge - currentTime < LIVE_DELAY - 2) {
+            const targetTime = liveEdge - LIVE_DELAY;
+            if (targetTime > 0 && targetTime < liveEdge) {
+              video.currentTime = targetTime;
+            }
+          }
+        }
+      } catch (e) {
+        // Silently fail if seekable isn't available
+      }
+    };
+
+    if (video) {
+      video.addEventListener('timeupdate', preventLiveEdgePlayback);
+    }
+
     const getBufferedAhead = () => {
       if (!video || video.buffered.length === 0) {
         return 0;
@@ -446,6 +484,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
     return () => {
       cancelled = true;
+      window.clearInterval(dvrIntervalId);
       window.clearInterval(freezeMonitorId);
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("stalled", onWaiting);
@@ -453,7 +492,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       video.removeEventListener("error", onVideoError);
       if (video) {
         video.removeEventListener('loadedmetadata', forceInfiniteDuration);
-        video.removeEventListener('timeupdate', forceLiveEdge);
+        video.removeEventListener('timeupdate', preventLiveEdgePlayback);
       }
       cleanup();
     };
