@@ -1,8 +1,8 @@
+// StreamPlayer.tsx
 "use client";
 
 import { Radio, Tv2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import Hls from "hls.js";
 
 import type { LiveChannel } from "@/lib/types";
 import { getIptvProxyBases, isHlsPlaylistUrl } from "@/lib/stream-url";
@@ -29,7 +29,7 @@ type MpegtsModule = {
 };
 
 type Strategy = {
-  kind: "hls" | "mpegts";
+  kind: "mpegts";
   label: string;
   url: string;
 };
@@ -46,7 +46,7 @@ function unwrapProxyUrl(streamUrl: string) {
   }
 }
 
-function buildDirectUrl(streamUrl: string, ext: "m3u8" | "ts") {
+function buildDirectUrl(streamUrl: string, ext: "ts") {
   const trimmed = unwrapProxyUrl(streamUrl.trim());
   const match = trimmed.match(XTREAM_LIVE_STREAM_PATTERN);
 
@@ -62,7 +62,6 @@ function buildProxyUrl(proxyBase: string, url: string) {
 }
 
 function shouldTryDirectPlayback(streamUrl: string): boolean {
-  // Attempt direct HLS playback when the URL points to an HLS playlist.
   return isHlsPlaylistUrl(streamUrl);
 }
 
@@ -72,15 +71,6 @@ function shouldTryContinuousMpegTs(): boolean {
 
 function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()): Strategy[] {
   const strategies: Strategy[] = [];
-
-  // Direct HLS strategy (if the URL points to an HLS playlist).
-  if (shouldTryDirectPlayback(streamUrl)) {
-    strategies.push({
-      kind: "hls",
-      label: "Direct HLS",
-      url: streamUrl,
-    });
-  }
 
   // Direct MPEG‑TS strategy (always try the raw .ts URL).
   const directTs = buildDirectUrl(streamUrl, "ts");
@@ -122,7 +112,6 @@ async function loadMpegtsModule(): Promise<MpegtsModule | null> {
 
 export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const hlsRef = useRef<Hls | null>(null);
   const mpegtsRef = useRef<MpegtsPlayer | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const recoveryCountRef = useRef(0);
@@ -151,6 +140,20 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       }
     }
 
+    function softReconnect() {
+      const player = mpegtsRef.current;
+      if (!player || !video) return false;
+
+      try {
+        player.unload();
+        player.load();
+        void player.play().catch(() => undefined);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
     function scheduleRecovery(reason: string, skipCurrentStrategy = false) {
       if (cancelled || reconnectTimerRef.current) {
         return;
@@ -164,6 +167,12 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       if (recoveryCountRef.current >= 10) {
         loadingRef.current = false;
         setStatus(`Playback failed: ${reason}`);
+        return;
+      }
+
+      // Try a soft reconnect first, only schedule a full recovery if it fails
+      if (!skipCurrentStrategy && softReconnect()) {
+        setStatus(`Reconnected: ${reason}`);
         return;
       }
 
@@ -181,11 +190,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     function cleanup() {
       clearReconnectTimer();
 
-      if (hlsRef.current) {
-        hlsRef.current.destroy();
-        hlsRef.current = null;
-      }
-
       if (mpegtsRef.current) {
         try {
           mpegtsRef.current.pause();
@@ -201,124 +205,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         video.removeAttribute("src");
         video.load();
       }
-    }
-
-    async function tryHls(strategy: Strategy) {
-      if (!video) {
-        throw new Error("Video element not ready.");
-      }
-
-      cleanup();
-      setStatus(`Trying ${strategy.label}...`);
-
-      await new Promise<void>((resolve, reject) => {
-        let started = false;
-        let settled = false;
-        const hls = new Hls({
-          enableWorker: true,
-          lowLatencyMode: false,
-
-          // FIX: More generous live sync — prevents constant re-syncing to live edge
-          liveSyncDurationCount: 6,
-          liveMaxLatencyDurationCount: 12,
-
-          // FIX: Larger buffer — absorbs IPTV jitter without triggering stalls
-          maxBufferLength: 30,
-          maxMaxBufferLength: 30,
-
-          // FIX: Reduced back buffer — saves memory, live streams don't need it
-          backBufferLength: 10,
-
-          liveDurationInfinity: true,
-
-          // FIX: Slightly higher playback rate ceiling for live catch-up
-          maxLiveSyncPlaybackRate: 1.15,
-
-          // FIX: More retries with longer timeouts for unstable IPTV sources
-          manifestLoadingMaxRetry: 10,
-          manifestLoadingRetryDelay: 2000,
-          manifestLoadingMaxRetryTimeout: 16000,
-          levelLoadingMaxRetry: 10,
-          levelLoadingRetryDelay: 2000,
-          levelLoadingMaxRetryTimeout: 16000,
-          fragLoadingMaxRetry: 10,
-          fragLoadingRetryDelay: 2000,
-          fragLoadingMaxRetryTimeout: 16000,
-
-          startFragPrefetch: true,
-          abrEwmaFastLive: 3,
-          abrEwmaSlowLive: 9,
-        });
-
-        hlsRef.current = hls;
-
-        const settleSuccess = () => {
-          if (settled) {
-            return;
-          }
-
-          settled = true;
-          started = true;
-          window.clearTimeout(timeoutId);
-          video.removeEventListener("playing", settleSuccess);
-          video.removeEventListener("canplay", settleSuccess);
-          video.removeEventListener("loadeddata", settleSuccess);
-          resolve();
-        };
-
-        // FIX: Increased initial timeout — cold Render proxy needs time to wake up
-        const timeoutId = window.setTimeout(() => {
-          if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA || video.buffered.length > 0) {
-            settleSuccess();
-            return;
-          }
-
-          reject(new Error(`${strategy.label} timed out.`));
-        }, 30000);
-
-        video.addEventListener("playing", settleSuccess, { once: true });
-        video.addEventListener("canplay", settleSuccess, { once: true });
-        video.addEventListener("loadeddata", settleSuccess, { once: true });
-
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          void video.play().catch(() => undefined);
-        });
-
-        hls.on(Hls.Events.FRAG_BUFFERED, settleSuccess);
-
-        hls.on(Hls.Events.ERROR, (_event, data) => {
-          if (data.fatal) {
-            if (started) {
-              if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                // FIX: Don't skip strategy on network errors — retry same route
-                setStatus(`${strategy.label} network error, recovering...`);
-                hls.startLoad();
-                return;
-              }
-
-              if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-                // FIX: Don't skip strategy on media errors — try recovery first
-                setStatus(`${strategy.label} media error, recovering...`);
-                hls.recoverMediaError();
-                return;
-              }
-
-              // Only skip on truly unrecoverable errors
-              scheduleRecovery(data.details || "fatal HLS error", true);
-              return;
-            }
-
-            window.clearTimeout(timeoutId);
-            video.removeEventListener("playing", settleSuccess);
-            video.removeEventListener("canplay", settleSuccess);
-            video.removeEventListener("loadeddata", settleSuccess);
-            reject(new Error(`${strategy.label} failed: ${data.details}`));
-          }
-        });
-
-        hls.loadSource(strategy.url);
-        hls.attachMedia(video);
-      });
     }
 
     async function tryMpegts(strategy: Strategy) {
@@ -392,8 +278,10 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         player.on(lib.Events.ERROR, (...args: unknown[]) => {
           const detail = typeof args[1] === "string" ? args[1] : "mpegts error";
           if (started) {
-            // FIX: Don't skip strategy on transient errors — retry same route
-            scheduleRecovery(detail, false);
+            // Attempt soft reconnect; only fallback to full recovery if it fails
+            if (!softReconnect()) {
+              scheduleRecovery(detail, false);
+            }
             return;
           }
 
@@ -432,12 +320,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
         try {
           currentStrategyRef.current = strategy;
-
-          if (strategy.kind === "hls") {
-            await tryHls(strategy);
-          } else {
-            await tryMpegts(strategy);
-          }
+          await tryMpegts(strategy);
 
           if (!cancelled) {
             loadingRef.current = false;
@@ -483,12 +366,22 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
     let lastCurrentTime = video.currentTime;
 
-    // Minimal monitor to keep track of playback time without triggering stalls
-    const monitorId = window.setInterval(() => {
+    // Monitor for freeze detection — if currentTime doesn't change for ~8s, soft reconnect
+    const freezeMonitorId = window.setInterval(() => {
       if (!video || cancelled || video.paused || loadingRef.current) {
         lastCurrentTime = video?.currentTime ?? 0;
         return;
       }
+
+      if (video.currentTime === lastCurrentTime) {
+        // Video appears frozen, try soft reconnect
+        if (softReconnect()) {
+          setStatus("Reconnected after freeze detection");
+        } else {
+          scheduleRecovery("stream frozen", false);
+        }
+      }
+
       lastCurrentTime = video.currentTime;
     }, 8000);
 
@@ -502,8 +395,18 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       }, 25000);
     };
 
-    const onEnded = () => scheduleRecovery("stream ended", true);
-    const onVideoError = () => scheduleRecovery(video.error?.message || "video error", true);
+    const onEnded = () => {
+      if (mpegtsRef.current) {
+        // Attempt soft restart instead of full recovery
+        if (!softReconnect()) {
+          scheduleRecovery("stream ended", false);
+        }
+      } else {
+        scheduleRecovery("stream ended", false);
+      }
+    };
+
+    const onVideoError = () => scheduleRecovery(video.error?.message || "video error", false);
 
     video.addEventListener("waiting", onWaiting);
     video.addEventListener("stalled", onWaiting);
@@ -512,7 +415,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
     return () => {
       cancelled = true;
-      window.clearInterval(monitorId);
+      window.clearInterval(freezeMonitorId);
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("stalled", onWaiting);
       video.removeEventListener("ended", onEnded);
