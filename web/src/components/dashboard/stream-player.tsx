@@ -147,8 +147,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       try {
         player.unload();
         player.load();
-        const playPromise = player.play();
-        playPromise.catch(() => scheduleRecovery("soft reconnect play failed", false));
+        void player.play().catch(() => undefined);
         return true;
       } catch {
         return false;
@@ -166,10 +165,8 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       }
 
       if (recoveryCountRef.current >= 10) {
-        // Reset and restart fresh instead of giving up permanently
-        recoveryCountRef.current = 0;
-        skippedStrategyUrlsRef.current = new Set();
-        setPlaybackNonce((value) => value + 1);
+        loadingRef.current = false;
+        setStatus(`Playback failed: ${reason}`);
         return;
       }
 
@@ -236,28 +233,15 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           {
             enableWorker: true,
             enableStashBuffer: true,
-            stashInitialSize: 4096,
+            stashInitialSize: 2048,
 
-            // Forward buffer / live-edge window
+            // FIX: Much more tolerant latency window — stops aggressive live-edge chasing
             liveBufferLatencyChasing: true,
-            liveBufferLatencyMaxLatency: 120,
-            liveBufferLatencyMinLatency: 30,
+            liveBufferLatencyMaxLatency: 90,
+            liveBufferLatencyMinLatency: 20,
 
-            // Larger IO buffer to absorb IPTV jitter
-            ioBufferSize: 4194304,
-
-            // Aggressive pre-buffering
-            lazyLoad: true,
-            lazyLoadMaxDuration: 120,
-            lazyLoadRecoverDuration: 60,
-
-            // Auto-cleanup of old played buffer to prevent memory growth
-            autoCleanupSourceBuffer: true,
-            autoCleanupMaxBackwardDuration: 30,
-            autoCleanupMinBackwardDuration: 15,
-
-            // Start loading immediately when source opens
-            deferLoadAfterSourceOpen: false,
+            // FIX: Larger IO buffer for absorbing IPTV jitter
+            ioBufferSize: 4194304, // 4MB
           },
         );
 
@@ -277,15 +261,15 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           resolve();
         };
 
-        // Increased initial timeout for slow IPTV sources
+        // FIX: Increased initial timeout
         const timeoutId = window.setTimeout(() => {
-          if (video.readyState >= HTMLMediaElement.HAVE_METADATA || video.buffered.length > 0) {
+          if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA || video.buffered.length > 0) {
             settleSuccess();
             return;
           }
 
           reject(new Error(`${strategy.label} timed out.`));
-        }, 60000);
+        }, 30000);
 
         video.addEventListener("playing", settleSuccess, { once: true });
         video.addEventListener("canplay", settleSuccess, { once: true });
@@ -340,12 +324,12 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
           if (!cancelled) {
             loadingRef.current = false;
-            recoveryCountRef.current = 0;
+            recoveryCountRef.current = 0; // FIX: Reset recovery count on successful connect
             setStatus(`${strategy.label} connected`);
           }
           return;
         } catch (attemptError) {
-          // Don't permanently blacklist on first failure — let retry cycle decide
+          skippedStrategyUrlsRef.current.add(strategy.url);
           lastError = attemptError instanceof Error ? attemptError.message : String(attemptError);
         }
       }
@@ -403,11 +387,11 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
     const onWaiting = () => {
       window.setTimeout(() => {
-        if (cancelled || !video || video.paused) return;
-        // Only recover if still stuck AND not already loading
-        if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA && !loadingRef.current) {
+        if (!cancelled && video && !video.paused && video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+          // FIX: false = don't skip strategy just because of a waiting event
           scheduleRecovery("waiting for data", false);
         }
+        // FIX: 25s timeout instead of 10s — IPTV streams legitimately pause before segments
       }, 25000);
     };
 
