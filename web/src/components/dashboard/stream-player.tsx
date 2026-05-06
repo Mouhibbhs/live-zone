@@ -127,6 +127,37 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     const video = videoRef.current;
     const channelKey = channel ? `${channel.id}:${channel.streamUrl}` : "";
 
+    // FORCE INFINITE DURATION FOR LIVE STREAM
+    const forceInfiniteDuration = () => {
+      if (!video) return;
+      try {
+        Object.defineProperty(video, 'duration', {
+          get: () => Infinity,
+          configurable: true,
+        });
+      } catch (e) {
+        // Silently fail if property can't be overridden
+      }
+    };
+
+    const forceLiveEdge = () => {
+      if (!video || video.seekable.length === 0) return;
+      try {
+        const liveEdge = video.seekable.end(0);
+        // Only adjust if drifted more than 30 seconds behind
+        if (liveEdge - video.currentTime > 30) {
+          video.currentTime = liveEdge - 5;
+        }
+      } catch (e) {
+        // Silently fail if seekable isn't available
+      }
+    };
+
+    if (video) {
+      video.addEventListener('loadedmetadata', forceInfiniteDuration);
+      video.addEventListener('timeupdate', forceLiveEdge);
+    }
+
     if (channelKey !== lastChannelKeyRef.current) {
       lastChannelKeyRef.current = channelKey;
       recoveryCountRef.current = 0;
@@ -233,7 +264,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           {
             enableWorker: true,
             enableStashBuffer: true,
-            stashInitialSize: 2048,
+            stashInitialSize: 512,
 
             // FIX: Much more tolerant latency window — stops aggressive live-edge chasing
             liveBufferLatencyChasing: true,
@@ -241,7 +272,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
             liveBufferLatencyMinLatency: 20,
 
             // FIX: Larger IO buffer for absorbing IPTV jitter
-            ioBufferSize: 4194304, // 4MB
+            ioBufferSize: 1048576,
           },
         );
 
@@ -420,6 +451,10 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       video.removeEventListener("stalled", onWaiting);
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("error", onVideoError);
+      if (video) {
+        video.removeEventListener('loadedmetadata', forceInfiniteDuration);
+        video.removeEventListener('timeupdate', forceLiveEdge);
+      }
       cleanup();
     };
   }, [channel?.id, channel?.streamUrl, playbackNonce]);
