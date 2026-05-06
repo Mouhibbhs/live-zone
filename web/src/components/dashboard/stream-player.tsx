@@ -263,11 +263,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
             // FIX: Larger IO buffer for absorbing IPTV jitter
             ioBufferSize: 4194304,
 
-            // IMPROVED BUFFER MANAGEMENT
-            lazyLoad: true,
-            lazyLoadMaxDuration: 120,
-            lazyLoadRecoverDuration: 60,
-
+            // CONTINUOUS LIVE DVR — sliding window buffer management
             autoCleanupSourceBuffer: true,
             autoCleanupMaxBackwardDuration: 30,
             autoCleanupMinBackwardDuration: 15,
