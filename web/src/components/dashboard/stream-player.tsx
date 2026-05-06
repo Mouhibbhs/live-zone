@@ -233,7 +233,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           {
             enableWorker: true,
             enableStashBuffer: true,
-            stashInitialSize: 512,
+            stashInitialSize: 2048,
 
             // FIX: Much more tolerant latency window — stops aggressive live-edge chasing
             liveBufferLatencyChasing: true,
@@ -241,7 +241,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
             liveBufferLatencyMinLatency: 20,
 
             // FIX: Larger IO buffer for absorbing IPTV jitter
-            ioBufferSize: 1048576,
+            ioBufferSize: 4194304, // 4MB
           },
         );
 
