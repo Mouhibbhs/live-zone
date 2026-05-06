@@ -166,9 +166,9 @@ function rewritePlaylist(req, playlistText, targetUrl) {
 
 
 
-      if (!trimmed || trimmed === "#EXT-X-ENDLIST") {
+      if (!trimmed ) {
 
-        return "";
+        return line;
 
       }
 
@@ -307,7 +307,8 @@ function writeProxyHeaders(res, upstream, target) {
     headers["Content-Type"] = getContentType(target.pathname);
 
   }
-
+  
+  headers["Transfer-Encoding"] = "chunked";
 
 
   res.writeHead(upstream.statusCode || 200, headers);
@@ -330,7 +331,7 @@ function pipeBinary(req, res, upstream, target, firstChunk) {
 
 
 
-  upstream.pipe(res, { end: true });
+  upstream.pipe(res);
 
 }
 
@@ -492,7 +493,7 @@ function proxyRequest(req, res, targetUrl, redirectCount = 0, userAgentIndex = 0
 
         writeProxyHeaders(res, upstream, target);
 
-        upstream.pipe(res, { end: true });
+        upstream.pipe(res);
 
         return;
 
