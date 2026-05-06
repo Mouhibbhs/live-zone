@@ -181,25 +181,7 @@ export default async (request) => {
     });
   }
 
-  // Handle raw .ts segment by synthesizing a live HLS playlist
-    if (!isPlaylist && targetUrl.toLowerCase().endsWith('.ts')) {
-      // Create a minimal live playlist that references the requested TS segment.
-      // The player will treat this as a live HLS stream and keep the MediaSource open.
-      const livePlaylist = `#EXTM3U
-#EXT-X-VERSION:3
-#EXT-X-TARGETDURATION:6
-#EXT-X-MEDIA-SEQUENCE:0
-#EXTINF:6.000,
-${targetUrl}`;
-      return new Response(livePlaylist, {
-        status: upstream.status,
-        headers: {
-          ...CORS_HEADERS,
-          "Content-Type": "application/vnd.apple.mpegurl",
-        },
-      });
-    }
-    // Pass‑through for non‑playlist assets.
+  // Pass‑through for non‑playlist assets.
 
   const responseHeaders = new Headers(CORS_HEADERS);
   responseHeaders.set("Content-Type", contentType || "application/octet-stream");
