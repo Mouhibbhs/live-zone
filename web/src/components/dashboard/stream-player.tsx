@@ -487,7 +487,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
     return () => {
       cancelled = true;
-      window.clearInterval(forcePlayLoop);  // kill the infinity play loop
+      window.clearInterval(forcePlayLoop);
       window.clearInterval(liveEdgeMonitorId);
       window.clearInterval(freezeMonitorId);
       video.removeEventListener("waiting", onWaiting);
@@ -522,6 +522,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           className="player-video" 
           autoPlay 
           muted 
+          controls
           playsInline 
           preload="metadata"
           controlsList="nopause noplaybackrate"
