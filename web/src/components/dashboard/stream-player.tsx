@@ -7,6 +7,9 @@ import { useEffect, useRef, useState } from "react";
 import type { LiveChannel } from "@/lib/types";
 import { getIptvProxyBases } from "@/lib/stream-url";
 
+import videojs from "video.js";
+import "video.js/dist/video-js.css";
+
 // -----------------------------------------------------------------------------
 // Type definitions for mpegts.js (used by the dynamic import)
 // -----------------------------------------------------------------------------
@@ -86,8 +89,7 @@ function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()
 
 async function loadMpegtsModule(): Promise<MpegtsModule | null> {
   try {
-    // If you want to use your local file instead, replace this with:
-    // const lib = (window as any).mpegts; return lib?.isSupported() ? lib : null;
+    // using installed npm package
     const module = await import("mpegts.js");
     const lib = (module.default ?? module) as unknown as MpegtsModule;
     return lib.isSupported() ? lib : null;
@@ -100,7 +102,7 @@ async function loadMpegtsModule(): Promise<MpegtsModule | null> {
 // Main Component
 // -----------------------------------------------------------------------------
 export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const mpegtsRef = useRef<MpegtsPlayer | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const recoveryCountRef = useRef(0);
@@ -111,14 +113,53 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const [status, setStatus] = useState("Idle");
   const [playbackNonce, setPlaybackNonce] = useState(0);
 
+  // Video.js player instance
+  const videoJsPlayerRef = useRef<ReturnType<typeof videojs> | null>(null);
+  // The actual underlying HTMLVideoElement (after Video.js wraps it)
+  const underlyingVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [videoJsReady, setVideoJsReady] = useState(false);
+
+  // Initialize Video.js once on mount
+  useEffect(() => {
+    if (!videoRef.current) return;
+    const vjsPlayer = videojs(videoRef.current, {
+      autoplay: true,
+      controls: true,          // <-- Ensures control bar is visible
+      preload: "auto",
+      fluid: false,
+      liveui: true,
+      inactivityTimeout: 0,
+      controlBar: {
+        volumePanel: true,
+        pictureInPictureToggle: false,
+      },
+    });
+    videoJsPlayerRef.current = vjsPlayer;
+
+    // As soon as Video.js is ready, extract the real video element
+    vjsPlayer.ready(() => {
+      const realVideo = vjsPlayer.el().querySelector("video") as HTMLVideoElement;
+      underlyingVideoRef.current = realVideo;
+      setVideoJsReady(true);
+    });
+
+    return () => {
+      if (videoJsPlayerRef.current) {
+        videoJsPlayerRef.current.dispose();
+        videoJsPlayerRef.current = null;
+      }
+      setVideoJsReady(false);
+    };
+  }, []); // only run once
+
   // DVR delay (play 20s behind live edge)
   const LIVE_DELAY = 20;
 
   useEffect(() => {
+    if (!videoJsReady || !underlyingVideoRef.current) return;
     let cancelled = false;
-    const video = videoRef.current;
+    const video = underlyingVideoRef.current; // this is the real video element
     const channelKey = channel ? `${channel.id}:${channel.streamUrl}` : "";
-
 
     // Always‑on playback (infinity loop)
     const forcePlayInterval = window.setInterval(() => {
@@ -296,7 +337,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
       video.muted = false;
       video.autoplay = true;
-      video.playsInline = true;
 
       const strategies = buildStrategies(
         channel.streamUrl,
@@ -404,7 +444,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       window.removeEventListener("keydown", blockKeys);
       cleanup();
     };
-  }, [channel?.id, channel?.streamUrl, playbackNonce]);
+  }, [channel?.id, channel?.streamUrl, playbackNonce, videoJsReady]);
 
   // --- UI (unchanged) ---
   if (!channel) {
@@ -422,15 +462,12 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   return (
     <div className="player-shell livezone-player">
       <div className="player-video-frame">
+        {/* Video.js styled video element – controls are now managed by Video.js */}
         <video
           ref={videoRef}
-          className="player-video"
-          autoPlay
-          muted
-          controls
+          className="video-js vjs-default-skin vjs-big-play-centered"
+          controls     // <-- This ensures the native browser control bar, Video.js will enhance it
           playsInline
-          preload="metadata"
-          controlsList="nopause noplaybackrate"
         />
       </div>
       <div className="player-footer">
