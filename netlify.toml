@@ -1,6 +1,5 @@
 [build]
-  command = "npm --prefix web ci && npm --prefix web run build cd web
-npm install video.js mpegts.js"
+  command = "npm --prefix web ci && npm --prefix web run build cd web npm install video.js mpegts.js"
   publish = "web/out"
   functions = "netlify/functions"
 
