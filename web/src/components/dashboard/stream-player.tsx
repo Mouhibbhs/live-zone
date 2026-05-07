@@ -119,17 +119,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     const video = videoRef.current;
     const channelKey = channel ? `${channel.id}:${channel.streamUrl}` : "";
 
-    // Force infinite duration (live stream)
-    const forceInfiniteDuration = () => {
-      if (!video) return;
-      try {
-        Object.defineProperty(video, "duration", {
-          get: () => Infinity,
-          configurable: true,
-        });
-      } catch {}
-    };
-    video?.addEventListener("loadedmetadata", forceInfiniteDuration);
 
     // Always‑on playback (infinity loop)
     const forcePlayInterval = window.setInterval(() => {
@@ -412,7 +401,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       video.removeEventListener("stalled", onWaiting);
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("error", onVideoError);
-      video.removeEventListener("loadedmetadata", forceInfiniteDuration);
       window.removeEventListener("keydown", blockKeys);
       cleanup();
     };
