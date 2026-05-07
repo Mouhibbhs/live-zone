@@ -11,7 +11,7 @@ import videojs from "video.js";
 import "video.js/dist/video-js.css";
 
 // -----------------------------------------------------------------------------
-// Type definitions for mpegts.js (used by the dynamic import)
+// Type definitions for mpegts.js
 // -----------------------------------------------------------------------------
 type MpegtsPlayer = {
   attachMediaElement(mediaElement: HTMLMediaElement): void;
@@ -41,7 +41,7 @@ type Strategy = {
 };
 
 // -----------------------------------------------------------------------------
-// Utility functions (unchanged)
+// Utility functions (unchanged – original proxy‑based strategy builder)
 // -----------------------------------------------------------------------------
 const XTREAM_LIVE_STREAM_PATTERN =
   /^(https?:\/\/.+\/live\/[^/]+\/[^/]+\/[^/.?]+)(?:\.(?:m3u8|ts|m2ts|flv))?(\?.*)?$/i;
@@ -80,6 +80,7 @@ function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()
     });
   });
 
+  // Remove duplicates and skipped URLs
   const unique = strategies.filter(
     (item, idx, arr) => item.url && arr.findIndex((e) => e.url === item.url) === idx,
   );
@@ -89,7 +90,6 @@ function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()
 
 async function loadMpegtsModule(): Promise<MpegtsModule | null> {
   try {
-    // using installed npm package
     const module = await import("mpegts.js");
     const lib = (module.default ?? module) as unknown as MpegtsModule;
     return lib.isSupported() ? lib : null;
@@ -115,7 +115,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
   // Video.js player instance
   const videoJsPlayerRef = useRef<ReturnType<typeof videojs> | null>(null);
-  // The actual underlying HTMLVideoElement (after Video.js wraps it)
   const underlyingVideoRef = useRef<HTMLVideoElement | null>(null);
   const [videoJsReady, setVideoJsReady] = useState(false);
 
@@ -124,7 +123,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     if (!videoRef.current) return;
     const vjsPlayer = videojs(videoRef.current, {
       autoplay: true,
-      controls: true,          // <-- Ensures control bar is visible
+      controls: true,
       preload: "auto",
       fluid: false,
       liveui: true,
@@ -136,7 +135,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     });
     videoJsPlayerRef.current = vjsPlayer;
 
-    // As soon as Video.js is ready, extract the real video element
     vjsPlayer.ready(() => {
       const realVideo = vjsPlayer.el().querySelector("video") as HTMLVideoElement;
       underlyingVideoRef.current = realVideo;
@@ -152,13 +150,12 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     };
   }, []); // only run once
 
-  // DVR delay (play 20s behind live edge)
   const LIVE_DELAY = 20;
 
   useEffect(() => {
     if (!videoJsReady || !underlyingVideoRef.current) return;
     let cancelled = false;
-    const video = underlyingVideoRef.current; // this is the real video element
+    const video = underlyingVideoRef.current;
     const channelKey = channel ? `${channel.id}:${channel.streamUrl}` : "";
 
     // Always‑on playback (infinity loop)
@@ -462,11 +459,10 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   return (
     <div className="player-shell livezone-player">
       <div className="player-video-frame">
-        {/* Video.js styled video element – controls are now managed by Video.js */}
         <video
           ref={videoRef}
           className="video-js vjs-default-skin vjs-big-play-centered"
-          controls     // <-- This ensures the native browser control bar, Video.js will enhance it
+          controls
           playsInline
         />
       </div>
