@@ -228,7 +228,8 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
             enableWorker: true,
 
             enableStashBuffer: true,
-            stashInitialSize: 1024,
+            stashInitialSize: 1024 * 1024 * 2 ,
+            ioBufferSize: 1024 * 1024 * 8,
 
             isLive: true,
 
@@ -236,9 +237,9 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
             liveBufferLatencyMaxLatency: 60,
             liveBufferLatencyMinRemain: 10,
 
-            lazyLoad: true,
+            lazyLoad: false,
 
-            autoCleanupSourceBuffer: true,
+            autoCleanupSourceBuffer: false,
             autoCleanupMaxBackwardDuration: 10,
             autoCleanupMinBackwardDuration: 5,
 
