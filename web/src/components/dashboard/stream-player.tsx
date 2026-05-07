@@ -279,15 +279,25 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           { type: "mse", url: strategy.url, isLive: true },
           {
             enableWorker: true,
+
             enableStashBuffer: true,
-            stashInitialSize: 4096,
+            stashInitialSize: 1024,
+
+            isLive: true,
+
             liveBufferLatencyChasing: true,
-            liveBufferLatencyMaxLatency: 150,
-            liveBufferLatencyMinLatency: 30,
-            ioBufferSize: 4194304,
+            liveBufferLatencyMaxLatency: 60,
+            liveBufferLatencyMinRemain: 10,
+
+            lazyLoad: false,
+
             autoCleanupSourceBuffer: true,
-            autoCleanupMaxBackwardDuration: 60,
-            autoCleanupMinBackwardDuration: 30,
+            autoCleanupMaxBackwardDuration: 30,
+            autoCleanupMinBackwardDuration: 10,
+
+            reuseRedirectedURL: true,
+
+            statisticsInfoReportInterval: 600,
           },
         );
         mpegtsRef.current = player;
