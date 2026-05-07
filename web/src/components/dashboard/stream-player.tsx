@@ -127,9 +127,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     const video = videoRef.current;
     const channelKey = channel ? `${channel.id}:${channel.streamUrl}` : "";
 
-    // DVR TIMESHIFT CONFIGURATION
-    const LIVE_DELAY = 20; // seconds behind live edge
-
     // FORCE INFINITE DURATION FOR LIVE STREAM
     const forceInfiniteDuration = () => {
       if (!video) return;
@@ -143,28 +140,23 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       }
     };
 
+    const forceLiveEdge = () => {
+      if (!video || video.seekable.length === 0) return;
+      try {
+        const liveEdge = video.seekable.end(0);
+        // Only adjust if drifted more than 30 seconds behind
+        if (liveEdge - video.currentTime > 30) {
+          video.currentTime = liveEdge - 5;
+        }
+      } catch (e) {
+        // Silently fail if seekable isn't available
+      }
+    };
+
     if (video) {
       video.addEventListener('loadedmetadata', forceInfiniteDuration);
+      video.addEventListener('timeupdate', forceLiveEdge);
     }
-
-    // PREVENT PAUSE — keep stream always playing
-    const preventPause = () => {
-      if (video && video.paused && !cancelled) {
-        video.play().catch(() => {});
-      }
-    };
-
-    // BLOCK KEYBOARD PAUSE (SPACEBAR)
-    const blockKeys = (e: KeyboardEvent) => {
-      if (e.code === "Space" && e.target === video) {
-        e.preventDefault();
-      }
-    };
-
-    if (video) {
-      video.addEventListener("pause", preventPause);
-    }
-    window.addEventListener("keydown", blockKeys);
 
     if (channelKey !== lastChannelKeyRef.current) {
       lastChannelKeyRef.current = channelKey;
@@ -272,7 +264,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           {
             enableWorker: true,
             enableStashBuffer: true,
-            stashInitialSize: 4096,
+            stashInitialSize: 512,
 
             // FIX: Much more tolerant latency window — stops aggressive live-edge chasing
             liveBufferLatencyChasing: true,
@@ -280,12 +272,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
             liveBufferLatencyMinLatency: 20,
 
             // FIX: Larger IO buffer for absorbing IPTV jitter
-            ioBufferSize: 4194304,
-
-            // CONTINUOUS LIVE DVR — sliding window buffer management
-            autoCleanupSourceBuffer: true,
-            autoCleanupMaxBackwardDuration: 30,
-            autoCleanupMinBackwardDuration: 15,
+            ioBufferSize: 1048576,
           },
         );
 
@@ -394,29 +381,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
     void startPlayback();
 
-    // SMART LIVE EDGE MONITOR — only adjusts when dangerously close to live edge
-    const liveEdgeMonitorId = window.setInterval(() => {
-      if (!video || cancelled || video.paused || loadingRef.current) return;
-
-      try {
-        if (video.seekable.length > 0) {
-          const liveEdge = video.seekable.end(0);
-          const distance = liveEdge - video.currentTime;
-
-          // Only correct if dangerously close to live edge (less than 3 seconds)
-          if (distance < 3) {
-            // Use playback rate adjustment for smoother experience
-            video.playbackRate = 0.97;
-          } else {
-            // Return to normal playback rate
-            video.playbackRate = 1.0;
-          }
-        }
-      } catch (e) {
-        // Silently fail if seekable isn't available
-      }
-    }, 5000);
-
     const getBufferedAhead = () => {
       if (!video || video.buffered.length === 0) {
         return 0;
@@ -482,17 +446,15 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
     return () => {
       cancelled = true;
-      window.clearInterval(liveEdgeMonitorId);
       window.clearInterval(freezeMonitorId);
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("stalled", onWaiting);
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("error", onVideoError);
       if (video) {
-        video.removeEventListener("pause", preventPause);
         video.removeEventListener('loadedmetadata', forceInfiniteDuration);
+        video.removeEventListener('timeupdate', forceLiveEdge);
       }
-      window.removeEventListener("keydown", blockKeys);
       cleanup();
     };
   }, [channel?.id, channel?.streamUrl, playbackNonce]);
@@ -512,15 +474,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   return (
     <div className="player-shell livezone-player">
       <div className="player-video-frame">
-        <video 
-          ref={videoRef} 
-          className="player-video" 
-          autoPlay 
-          muted 
-          playsInline 
-          preload="metadata"
-          controlsList="nopause noplaybackrate"
-        />
+        <video ref={videoRef} className="player-video" autoPlay muted controls playsInline preload="metadata" />
       </div>
 
       <div className="player-footer">
