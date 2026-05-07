@@ -7,8 +7,12 @@ import { useEffect, useRef, useState } from "react";
 import type { LiveChannel } from "@/lib/types";
 import { getIptvProxyBases } from "@/lib/stream-url";
 
+// Fake DVR constants
+const DVR_WINDOW = 2 * 60 * 60; // 2 hours
+const DVR_DELAY = 20; // stay 20s behind live edge
+
 // -----------------------------------------------------------------------------
-// Type definitions for mpegts.js (used by the dynamic import)
+// Type definitions for mpegts.js (unchanged)
 // -----------------------------------------------------------------------------
 type MpegtsPlayer = {
   attachMediaElement(mediaElement: HTMLMediaElement): void;
@@ -38,7 +42,7 @@ type Strategy = {
 };
 
 // -----------------------------------------------------------------------------
-// Utility functions (unchanged)
+// Stream URL helpers (unchanged)
 // -----------------------------------------------------------------------------
 const XTREAM_LIVE_STREAM_PATTERN =
   /^(https?:\/\/.+\/live\/[^/]+\/[^/]+\/[^/.?]+)(?:\.(?:m3u8|ts|m2ts|flv))?(\?.*)?$/i;
@@ -86,8 +90,6 @@ function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()
 
 async function loadMpegtsModule(): Promise<MpegtsModule | null> {
   try {
-    // If you want to use your local file instead, replace this with:
-    // const lib = (window as any).mpegts; return lib?.isSupported() ? lib : null;
     const module = await import("mpegts.js");
     const lib = (module.default ?? module) as unknown as MpegtsModule;
     return lib.isSupported() ? lib : null;
@@ -111,14 +113,63 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const [status, setStatus] = useState("Idle");
   const [playbackNonce, setPlaybackNonce] = useState(0);
 
-  // DVR delay (play 20s behind live edge)
-  const LIVE_DELAY = 20;
+  // DVR session refs
+  const playbackStartedAtRef = useRef(Date.now());
+  const dvrDurationRef = useRef(DVR_WINDOW);
 
   useEffect(() => {
     let cancelled = false;
     const video = videoRef.current;
     const channelKey = channel ? `${channel.id}:${channel.streamUrl}` : "";
 
+    // ----- Fake DVR setup -----
+    // Grab the real seekable getter for internal use later
+    const realSeekableGetter = Object.getOwnPropertyDescriptor(
+      HTMLMediaElement.prototype,
+      "seekable",
+    )?.get;
+
+    // Helper to read real live edge (seconds)
+    const getRealLiveEdge = (): number => {
+      if (!video) return 0;
+      try {
+        const raw = realSeekableGetter?.call(video);
+        if (raw && raw.length > 0) {
+          return raw.end(raw.length - 1);
+        }
+      } catch {
+        // fallback
+      }
+      return 0;
+    };
+
+    // Apply fake duration and seekable on the video element
+    const applyFakeDvrProperties = () => {
+      if (!video) return;
+      try {
+        Object.defineProperty(video, "duration", {
+          get: () => dvrDurationRef.current,
+          configurable: true,
+        });
+      } catch {}
+      try {
+        Object.defineProperty(video, "seekable", {
+          get: () => ({
+            length: 1,
+            start: () => 0,
+            end: () => dvrDurationRef.current,
+          }),
+          configurable: true,
+        });
+      } catch {}
+    };
+
+    // Increase dvrDurationRef over time (growing window)
+    const durationGrowthInterval = window.setInterval(() => {
+      if (!video || cancelled) return;
+      const elapsed = (Date.now() - playbackStartedAtRef.current) / 1000;
+      dvrDurationRef.current = elapsed + DVR_WINDOW;
+    }, 1000);
 
     // Always‑on playback (infinity loop)
     const forcePlayInterval = window.setInterval(() => {
@@ -136,13 +187,16 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     };
     window.addEventListener("keydown", blockKeys);
 
-    // Reset state when channel changes
+    // Reset session on channel change
     if (channelKey !== lastChannelKeyRef.current) {
       lastChannelKeyRef.current = channelKey;
       recoveryCountRef.current = 0;
       skippedStrategyUrlsRef.current = new Set();
+      playbackStartedAtRef.current = Date.now();
+      dvrDurationRef.current = DVR_WINDOW;
     }
 
+    // ---- Existing reconnect / soft reconnect ----
     const clearReconnectTimer = () => {
       if (reconnectTimerRef.current) {
         window.clearTimeout(reconnectTimerRef.current);
@@ -150,7 +204,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       }
     };
 
-    // Soft reconnect (unload → load → play) – never destroy
     const softReconnect = (): boolean => {
       const player = mpegtsRef.current;
       if (!player || !video) return false;
@@ -177,7 +230,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         return;
       }
 
-      // Try soft reconnect first
       if (!skipCurrentStrategy && softReconnect()) {
         setStatus(`Reconnected: ${reason}`);
         return;
@@ -209,6 +261,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       }
     };
 
+    // ---- MPEGTS strategy runner ----
     const tryMpegts = async (strategy: Strategy) => {
       if (!video) throw new Error("Video element not ready.");
 
@@ -233,8 +286,8 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
             liveBufferLatencyMinLatency: 30,
             ioBufferSize: 4194304,
             autoCleanupSourceBuffer: true,
-            autoCleanupMaxBackwardDuration: 30,
-            autoCleanupMinBackwardDuration: 15,
+            autoCleanupMaxBackwardDuration: 60,
+            autoCleanupMinBackwardDuration: 30,
           },
         );
         mpegtsRef.current = player;
@@ -247,6 +300,8 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           video.removeEventListener("playing", settleSuccess);
           video.removeEventListener("canplay", settleSuccess);
           video.removeEventListener("loadeddata", settleSuccess);
+          // Apply fake DVR properties once the stream is running
+          applyFakeDvrProperties();
           resolve();
         };
 
@@ -263,7 +318,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
         video.addEventListener("playing", settleSuccess, { once: true });
         video.addEventListener("canplay", settleSuccess, { once: true });
-        video.addEventListener("loadeddata", settleSuccess, { once: true });
+        video.addEventListener("loadedmeta data", settleSuccess, { once: true });
 
         player.on(lib.Events.ERROR, (...args: unknown[]) => {
           const detail = typeof args[1] === "string" ? args[1] : "mpegts error";
@@ -274,11 +329,10 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           window.clearTimeout(timeoutId);
           video.removeEventListener("playing", settleSuccess);
           video.removeEventListener("canplay", settleSuccess);
-          video.removeEventListener("loadeddata", settleSuccess);
+          video.removeEventListener("loadedmeta data", settleSuccess);
           reject(new Error(`${strategy.label} failed: ${detail}`));
         });
 
-        // Seamless reload when stream ends (MediaSource ended)
         player.on("ended", () => {
           if (started && !cancelled) softReconnect();
         });
@@ -337,29 +391,25 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
     void startPlayback();
 
-    // Smart live‑edge monitor (playback rate tweak)
-    const liveEdgeMonitor = window.setInterval(() => {
+    // ---- DVR Timeshift loop (replaces old live‑edge monitor) ----
+    const dvrTimeshiftInterval = window.setInterval(() => {
       if (!video || cancelled || video.paused || loadingRef.current) return;
-      try {
-        if (video.seekable.length > 0) {
-          const liveEdge = video.seekable.end(0);
-          const distance = liveEdge - video.currentTime;
-          video.playbackRate = distance < 3 ? 0.97 : 1.0;
+      const realLiveEdge = getRealLiveEdge();
+      if (realLiveEdge <= 0) return;
+
+      const targetPosition = realLiveEdge - DVR_DELAY;
+      const drift = video.currentTime - targetPosition;
+
+      // If we drifted too far ahead (too close to live edge), seek back
+      if (drift > 3 || realLiveEdge - video.currentTime < DVR_DELAY - 2) {
+        if (targetPosition > 0) {
+          video.currentTime = targetPosition;
         }
-      } catch {}
-    }, 5000);
-
-    // ---------- 2‑hour endpoint ----------
-    const TWO_HOURS_SEC = 2 * 60 * 60; // 7200 seconds
-    const endpointMonitor = window.setInterval(() => {
-      if (!video || cancelled || video.paused) return;
-      if (video.currentTime >= TWO_HOURS_SEC) {
-        video.pause();
-        setStatus('Reached 2‑hour limit');
       }
-    }, 1000);
+      // If we are behind, we can optionally nudge forward, but not required
+    }, 3000);
 
-    // Freeze detection (8 seconds)
+    // ---- Freeze detection (unchanged) ----
     let lastCurrentTime = video.currentTime;
     const freezeMonitor = window.setInterval(() => {
       if (!video || cancelled || video.paused || loadingRef.current) {
@@ -401,16 +451,18 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     video.addEventListener("ended", onEnded);
     video.addEventListener("error", onVideoError);
 
-    // --- Final cleanup on unmount / dependency change ---
+    // Final cleanup
     return () => {
       cancelled = true;
       window.clearInterval(forcePlayInterval);
-      window.clearInterval(liveEdgeMonitor);
+      window.clearInterval(dvrTimeshiftInterval);
+      window.clearInterval(durationGrowthInterval);
       window.clearInterval(freezeMonitor);
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("stalled", onWaiting);
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("error", onVideoError);
+      video.removeEventListener("loadedmetadata", applyFakeDvrProperties);
       window.removeEventListener("keydown", blockKeys);
       cleanup();
     };
