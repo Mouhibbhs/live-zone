@@ -7,11 +7,8 @@ import { useEffect, useRef, useState } from "react";
 import type { LiveChannel } from "@/lib/types";
 import { getIptvProxyBases } from "@/lib/stream-url";
 
-import videojs from "video.js";
-import "video.js/dist/video-js.css";
-
 // -----------------------------------------------------------------------------
-// Type definitions for mpegts.js
+// Type definitions for mpegts.js (used by the dynamic import)
 // -----------------------------------------------------------------------------
 type MpegtsPlayer = {
   attachMediaElement(mediaElement: HTMLMediaElement): void;
@@ -41,7 +38,7 @@ type Strategy = {
 };
 
 // -----------------------------------------------------------------------------
-// Utility functions (unchanged – original proxy‑based strategy builder)
+// Utility functions (unchanged)
 // -----------------------------------------------------------------------------
 const XTREAM_LIVE_STREAM_PATTERN =
   /^(https?:\/\/.+\/live\/[^/]+\/[^/]+\/[^/.?]+)(?:\.(?:m3u8|ts|m2ts|flv))?(\?.*)?$/i;
@@ -80,7 +77,6 @@ function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()
     });
   });
 
-  // Remove duplicates and skipped URLs
   const unique = strategies.filter(
     (item, idx, arr) => item.url && arr.findIndex((e) => e.url === item.url) === idx,
   );
@@ -90,6 +86,8 @@ function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()
 
 async function loadMpegtsModule(): Promise<MpegtsModule | null> {
   try {
+    // If you want to use your local file instead, replace this with:
+    // const lib = (window as any).mpegts; return lib?.isSupported() ? lib : null;
     const module = await import("mpegts.js");
     const lib = (module.default ?? module) as unknown as MpegtsModule;
     return lib.isSupported() ? lib : null;
@@ -102,7 +100,7 @@ async function loadMpegtsModule(): Promise<MpegtsModule | null> {
 // Main Component
 // -----------------------------------------------------------------------------
 export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const mpegtsRef = useRef<MpegtsPlayer | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const recoveryCountRef = useRef(0);
@@ -113,50 +111,14 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const [status, setStatus] = useState("Idle");
   const [playbackNonce, setPlaybackNonce] = useState(0);
 
-  // Video.js player instance
-  const videoJsPlayerRef = useRef<ReturnType<typeof videojs> | null>(null);
-  const underlyingVideoRef = useRef<HTMLVideoElement | null>(null);
-  const [videoJsReady, setVideoJsReady] = useState(false);
-
-  // Initialize Video.js once on mount
-  useEffect(() => {
-    if (!videoRef.current) return;
-    const vjsPlayer = videojs(videoRef.current, {
-      autoplay: true,
-      controls: true,
-      preload: "auto",
-      fluid: false,
-      liveui: true,
-      inactivityTimeout: 0,
-      controlBar: {
-        volumePanel: true,
-        pictureInPictureToggle: false,
-      },
-    });
-    videoJsPlayerRef.current = vjsPlayer;
-
-    vjsPlayer.ready(() => {
-      const realVideo = vjsPlayer.el().querySelector("video") as HTMLVideoElement;
-      underlyingVideoRef.current = realVideo;
-      setVideoJsReady(true);
-    });
-
-    return () => {
-      if (videoJsPlayerRef.current) {
-        videoJsPlayerRef.current.dispose();
-        videoJsPlayerRef.current = null;
-      }
-      setVideoJsReady(false);
-    };
-  }, []); // only run once
-
+  // DVR delay (play 20s behind live edge)
   const LIVE_DELAY = 20;
 
   useEffect(() => {
-    if (!videoJsReady || !underlyingVideoRef.current) return;
     let cancelled = false;
-    const video = underlyingVideoRef.current;
+    const video = videoRef.current;
     const channelKey = channel ? `${channel.id}:${channel.streamUrl}` : "";
+
 
     // Always‑on playback (infinity loop)
     const forcePlayInterval = window.setInterval(() => {
@@ -334,6 +296,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
       video.muted = false;
       video.autoplay = true;
+      video.playsInline = true;
 
       const strategies = buildStrategies(
         channel.streamUrl,
@@ -441,7 +404,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       window.removeEventListener("keydown", blockKeys);
       cleanup();
     };
-  }, [channel?.id, channel?.streamUrl, playbackNonce, videoJsReady]);
+  }, [channel?.id, channel?.streamUrl, playbackNonce]);
 
   // --- UI (unchanged) ---
   if (!channel) {
@@ -461,9 +424,13 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       <div className="player-video-frame">
         <video
           ref={videoRef}
-          className="video-js vjs-default-skin vjs-big-play-centered"
+          className="player-video"
+          autoPlay
+          muted
           controls
           playsInline
+          preload="metadata"
+          controlsList="nopause noplaybackrate"
         />
       </div>
       <div className="player-footer">
