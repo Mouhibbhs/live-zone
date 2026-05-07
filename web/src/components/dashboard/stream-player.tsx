@@ -227,14 +227,11 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           {
             enableWorker: true,
             enableStashBuffer: true,
-            // Larger stash buffer to hold more data before playback starts
-            stashInitialSize: 16384,
+            stashInitialSize: 4096,
             liveBufferLatencyChasing: true,
-            // Increase latency window to tolerate gaps in incoming data
             liveBufferLatencyMaxLatency: 150,
             liveBufferLatencyMinLatency: 30,
-            // Bigger IO buffer for higher bitrate streams
-            ioBufferSize: 8388608,
+            ioBufferSize: 4194304,
             autoCleanupSourceBuffer: true,
             autoCleanupMaxBackwardDuration: 30,
             autoCleanupMinBackwardDuration: 15,
