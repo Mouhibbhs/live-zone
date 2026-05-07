@@ -253,7 +253,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           {
             enableWorker: true,
             enableStashBuffer: true,
-            stashInitialSize: 512,
+            stashInitialSize: 4096,
 
             // FIX: Much more tolerant latency window — stops aggressive live-edge chasing
             liveBufferLatencyChasing: true,
@@ -261,7 +261,12 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
             liveBufferLatencyMinLatency: 20,
 
             // FIX: Larger IO buffer for absorbing IPTV jitter
-            ioBufferSize: 1048576,
+            ioBufferSize: 4194304,
+
+            // CONTINUOUS LIVE DVR — sliding window buffer management
+            autoCleanupSourceBuffer: true,
+            autoCleanupMaxBackwardDuration: 30,
+            autoCleanupMinBackwardDuration: 15,
           },
         );
 
@@ -370,54 +375,28 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
     void startPlayback();
 
-    // DVR TIMESHIFT — keep playback consistently behind live edge
-    const dvrIntervalId = window.setInterval(() => {
-      if (!video || video.paused || cancelled || loadingRef.current) return;
-      
+    // SMART LIVE EDGE MONITOR — only adjusts when dangerously close to live edge
+    const liveEdgeMonitorId = window.setInterval(() => {
+      if (!video || cancelled || video.paused || loadingRef.current) return;
+
       try {
         if (video.seekable.length > 0) {
           const liveEdge = video.seekable.end(0);
-          const targetTime = liveEdge - LIVE_DELAY;
-          const currentTime = video.currentTime;
-          
-          // Only adjust if we're more than 2 seconds away from target
-          if (Math.abs(currentTime - targetTime) > 2) {
-            // Ensure target is valid
-            if (targetTime > 0 && targetTime < liveEdge) {
-              video.currentTime = targetTime;
-            }
+          const distance = liveEdge - video.currentTime;
+
+          // Only correct if dangerously close to live edge (less than 3 seconds)
+          if (distance < 3) {
+            // Use playback rate adjustment for smoother experience
+            video.playbackRate = 0.97;
+          } else {
+            // Return to normal playback rate
+            video.playbackRate = 1.0;
           }
         }
       } catch (e) {
         // Silently fail if seekable isn't available
       }
-    }, 3000);
-
-    // PREVENT PLAYING TOO CLOSE TO LIVE EDGE
-    const preventLiveEdgePlayback = () => {
-      if (!video || video.paused || cancelled || loadingRef.current) return;
-      
-      try {
-        if (video.seekable.length > 0) {
-          const liveEdge = video.seekable.end(0);
-          const currentTime = video.currentTime;
-          
-          // If we're too close to live edge (less than LIVE_DELAY - 2 seconds)
-          if (liveEdge - currentTime < LIVE_DELAY - 2) {
-            const targetTime = liveEdge - LIVE_DELAY;
-            if (targetTime > 0 && targetTime < liveEdge) {
-              video.currentTime = targetTime;
-            }
-          }
-        }
-      } catch (e) {
-        // Silently fail if seekable isn't available
-      }
-    };
-
-    if (video) {
-      video.addEventListener('timeupdate', preventLiveEdgePlayback);
-    }
+    }, 5000);
 
     const getBufferedAhead = () => {
       if (!video || video.buffered.length === 0) {
@@ -484,7 +463,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
     return () => {
       cancelled = true;
-      window.clearInterval(dvrIntervalId);
+      window.clearInterval(liveEdgeMonitorId);
       window.clearInterval(freezeMonitorId);
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("stalled", onWaiting);
@@ -492,7 +471,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       video.removeEventListener("error", onVideoError);
       if (video) {
         video.removeEventListener('loadedmetadata', forceInfiniteDuration);
-        video.removeEventListener('timeupdate', preventLiveEdgePlayback);
       }
       cleanup();
     };
