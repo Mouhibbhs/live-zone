@@ -147,6 +147,25 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       video.addEventListener('loadedmetadata', forceInfiniteDuration);
     }
 
+    // PREVENT PAUSE — keep stream always playing
+    const preventPause = () => {
+      if (video && video.paused && !cancelled) {
+        video.play().catch(() => {});
+      }
+    };
+
+    // BLOCK KEYBOARD PAUSE (SPACEBAR)
+    const blockKeys = (e: KeyboardEvent) => {
+      if (e.code === "Space" && e.target === video) {
+        e.preventDefault();
+      }
+    };
+
+    if (video) {
+      video.addEventListener("pause", preventPause);
+    }
+    window.addEventListener("keydown", blockKeys);
+
     if (channelKey !== lastChannelKeyRef.current) {
       lastChannelKeyRef.current = channelKey;
       recoveryCountRef.current = 0;
@@ -317,6 +336,13 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           reject(new Error(`${strategy.label} failed: ${detail}`));
         });
 
+        // When the MediaSource signals ended (stream ends), load new data seamlessly
+        player.on('ended', () => {
+          if (started && !cancelled) {
+            softReconnect();
+          }
+        });
+
         player.attachMediaElement(video);
         player.load();
         void player.play().catch(() => undefined);
@@ -470,8 +496,10 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("error", onVideoError);
       if (video) {
+        video.removeEventListener("pause", preventPause);
         video.removeEventListener('loadedmetadata', forceInfiniteDuration);
       }
+      window.removeEventListener("keydown", blockKeys);
       cleanup();
     };
   }, [channel?.id, channel?.streamUrl, playbackNonce]);
@@ -491,7 +519,15 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   return (
     <div className="player-shell livezone-player">
       <div className="player-video-frame">
-        <video ref={videoRef} className="player-video" autoPlay muted controls playsInline preload="metadata" />
+        <video 
+          ref={videoRef} 
+          className="player-video" 
+          autoPlay 
+          muted 
+          playsInline 
+          preload="metadata"
+          controlsList="nopause noplaybackrate"
+        />
       </div>
 
       <div className="player-footer">
