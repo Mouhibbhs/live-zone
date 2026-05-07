@@ -232,15 +232,15 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
             isLive: true,
 
-            liveBufferLatencyChasing: true,
+            liveBufferLatencyChasing: false,
             liveBufferLatencyMaxLatency: 60,
             liveBufferLatencyMinRemain: 10,
 
-            lazyLoad: false,
+            lazyLoad: true,
 
             autoCleanupSourceBuffer: true,
-            autoCleanupMaxBackwardDuration: 30,
-            autoCleanupMinBackwardDuration: 10,
+            autoCleanupMaxBackwardDuration: 10,
+            autoCleanupMinBackwardDuration: 5,
 
             reuseRedirectedURL: true,
 
