@@ -147,23 +147,21 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       video.addEventListener('loadedmetadata', forceInfiniteDuration);
     }
 
-    // PREVENT PAUSE — keep stream always playing
-    const preventPause = () => {
-      if (video && video.paused && !cancelled) {
+    // === INFINITY LOOP: ALWAYS KEEP PLAYING ===
+    const INFINITY_PLAY_INTERVAL = 200; // check every 200ms
+    const forcePlayLoop = window.setInterval(() => {
+      if (!video || cancelled) return;
+      if (video.paused) {
         video.play().catch(() => {});
       }
-    };
+    }, INFINITY_PLAY_INTERVAL);
 
-    // BLOCK KEYBOARD PAUSE (SPACEBAR)
+    // Block keyboard pause (spacebar) when video is focused
     const blockKeys = (e: KeyboardEvent) => {
       if (e.code === "Space" && e.target === video) {
         e.preventDefault();
       }
     };
-
-    if (video) {
-      video.addEventListener("pause", preventPause);
-    }
     window.addEventListener("keydown", blockKeys);
 
     if (channelKey !== lastChannelKeyRef.current) {
@@ -489,6 +487,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
     return () => {
       cancelled = true;
+      window.clearInterval(forcePlayLoop);  // kill the infinity play loop
       window.clearInterval(liveEdgeMonitorId);
       window.clearInterval(freezeMonitorId);
       video.removeEventListener("waiting", onWaiting);
@@ -496,7 +495,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("error", onVideoError);
       if (video) {
-        video.removeEventListener("pause", preventPause);
         video.removeEventListener('loadedmetadata', forceInfiniteDuration);
       }
       window.removeEventListener("keydown", blockKeys);
