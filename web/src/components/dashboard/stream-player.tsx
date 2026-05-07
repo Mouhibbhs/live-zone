@@ -349,6 +349,16 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       } catch {}
     }, 5000);
 
+    // ---------- 2‑hour endpoint ----------
+    const TWO_HOURS_SEC = 2 * 60 * 60; // 7200 seconds
+    const endpointMonitor = window.setInterval(() => {
+      if (!video || cancelled || video.paused) return;
+      if (video.currentTime >= TWO_HOURS_SEC) {
+        video.pause();
+        setStatus('Reached 2‑hour limit');
+      }
+    }, 1000);
+
     // Freeze detection (8 seconds)
     let lastCurrentTime = video.currentTime;
     const freezeMonitor = window.setInterval(() => {
