@@ -66,7 +66,6 @@ function buildProxyUrl(proxyBase: string, url: string) {
 function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()): Strategy[] {
   const strategies: Strategy[] = [];
   const directTs = buildDirectUrl(streamUrl, "ts");
-  strategies.push({ kind: "mpegts", label: "Direct MPEG-TS", url: directTs });
 
   const proxyBases = getIptvProxyBases();
   proxyBases.forEach((proxyBase, index) => {
@@ -76,6 +75,8 @@ function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()
       url: buildProxyUrl(proxyBase, directTs),
     });
   });
+
+  strategies.push({ kind: "mpegts", label: "Direct MPEG-TS", url: directTs });
 
   const unique = strategies.filter(
     (item, idx, arr) => item.url && arr.findIndex((e) => e.url === item.url) === idx,
@@ -92,7 +93,8 @@ async function loadMpegtsModule(): Promise<MpegtsModule | null> {
     const lib = (module.default ?? module) as unknown as MpegtsModule;
     return lib.isSupported() ? lib : null;
   } catch {
-    return null;
+    const lib = (window as unknown as { mpegts?: MpegtsModule }).mpegts;
+    return lib?.isSupported() ? lib : null;
   }
 }
 
@@ -110,9 +112,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const lastChannelKeyRef = useRef("");
   const [status, setStatus] = useState("Idle");
   const [playbackNonce, setPlaybackNonce] = useState(0);
-
-  // DVR delay (play 20s behind live edge)
-  const LIVE_DELAY = 20;
 
   useEffect(() => {
     let cancelled = false;
@@ -277,7 +276,12 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         video.addEventListener("loadeddata", settleSuccess, { once: true });
 
         player.on(lib.Events.ERROR, (...args: unknown[]) => {
-          const detail = typeof args[1] === "string" ? args[1] : "mpegts error";
+          const detail =
+            typeof args[1] === "string"
+              ? args[1]
+              : typeof args[0] === "string"
+                ? args[0]
+                : "mpegts error";
           if (started) {
             if (!softReconnect()) scheduleRecovery(detail, false);
             return;
@@ -305,7 +309,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       loadingRef.current = true;
       setStatus("Preparing stream...");
 
-      video.muted = false;
+      video.muted = true;
       video.autoplay = true;
       video.playsInline = true;
 
@@ -342,6 +346,8 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       cleanup();
       return () => {
         cancelled = true;
+        window.clearInterval(forcePlayInterval);
+        window.removeEventListener("keydown", blockKeys);
         cleanup();
       };
     }
