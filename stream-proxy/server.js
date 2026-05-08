@@ -2,6 +2,8 @@ const http = require("http");
 
 const https = require("https");
 
+const { spawn } = require("child_process");
+
 
 
 const PORT = Number(process.env.PORT || process.env.PROXY_PORT || 8787);
@@ -138,6 +140,12 @@ function getProxyEndpoint(req) {
 
 }
 
+function getJSMpegEndpoint(req) {
+
+  return getProxyEndpoint(req).replace(/\/proxy$/, "/jsmpeg");
+
+}
+
 
 
 function proxyUrl(req, value, target) {
@@ -145,6 +153,14 @@ function proxyUrl(req, value, target) {
   const resolved = new URL(value, target).toString();
 
   return `${getProxyEndpoint(req)}?url=${encodeURIComponent(resolved)}`;
+
+}
+
+function jsmpegUrl(req, value, target) {
+
+  const resolved = new URL(value, target).toString();
+
+  return `${getJSMpegEndpoint(req)}?url=${encodeURIComponent(resolved)}`;
 
 }
 
@@ -585,6 +601,204 @@ function proxyRequest(req, res, targetUrl, redirectCount = 0, userAgentIndex = 0
 
 }
 
+function transcodeForJSMpeg(req, res, targetUrl) {
+
+  let target;
+
+  try {
+
+    target = new URL(targetUrl);
+
+  } catch {
+
+    res.writeHead(400, { ...corsHeaders(), "Content-Type": "text/plain" });
+
+    res.end("Invalid url parameter");
+
+    return;
+
+  }
+
+  const headerProfile = getUpstreamHeaderProfiles()[0];
+
+  const referer = headerProfile.referer === "origin" ? target.origin : headerProfile.referer;
+
+  const ffmpegArgs = [
+
+    "-hide_banner",
+
+    "-loglevel",
+
+    "error",
+
+    "-fflags",
+
+    "nobuffer",
+
+    "-flags",
+
+    "low_delay",
+
+    "-user_agent",
+
+    headerProfile.userAgent,
+
+  ];
+
+  if (referer) {
+
+    ffmpegArgs.push("-headers", `Referer: ${referer}\r\n`);
+
+  }
+
+  ffmpegArgs.push(
+
+    "-i",
+
+    target.toString(),
+
+    "-map",
+
+    "0:v:0",
+
+    "-map",
+
+    "0:a:0?",
+
+    "-c:v",
+
+    "mpeg1video",
+
+    "-b:v",
+
+    process.env.JSMPEG_VIDEO_BITRATE || "1600k",
+
+    "-r",
+
+    process.env.JSMPEG_FPS || "25",
+
+    "-bf",
+
+    "0",
+
+    "-c:a",
+
+    "mp2",
+
+    "-b:a",
+
+    process.env.JSMPEG_AUDIO_BITRATE || "128k",
+
+    "-ac",
+
+    "2",
+
+    "-ar",
+
+    "44100",
+
+    "-f",
+
+    "mpegts",
+
+    "-",
+
+  );
+
+  const ffmpeg = spawn(process.env.FFMPEG_PATH || "ffmpeg", ffmpegArgs, {
+
+    stdio: ["ignore", "pipe", "pipe"],
+
+  });
+
+  let stderr = "";
+
+  const closeFfmpeg = () => {
+
+    if (!ffmpeg.killed) {
+
+      ffmpeg.kill("SIGTERM");
+
+    }
+
+  };
+
+  ffmpeg.stdout.once("data", (chunk) => {
+
+    res.writeHead(200, {
+
+      ...corsHeaders(),
+
+      "Content-Type": "video/mp2t",
+
+      "Transfer-Encoding": "chunked",
+
+    });
+
+    if (req.method === "HEAD") {
+
+      closeFfmpeg();
+
+      res.end();
+
+      return;
+
+    }
+
+    res.write(chunk);
+
+    ffmpeg.stdout.pipe(res);
+
+  });
+
+  ffmpeg.stderr.on("data", (chunk) => {
+
+    stderr += chunk.toString();
+
+    if (stderr.length > 2000) {
+
+      stderr = stderr.slice(-2000);
+
+    }
+
+  });
+
+  ffmpeg.on("error", (error) => {
+
+    if (!res.headersSent) {
+
+      res.writeHead(500, { ...corsHeaders(), "Content-Type": "text/plain" });
+
+    }
+
+    res.end(`Unable to start ffmpeg: ${error.message}`);
+
+  });
+
+  ffmpeg.on("close", (code) => {
+
+    if (!res.headersSent) {
+
+      res.writeHead(code === 0 ? 204 : 502, { ...corsHeaders(), "Content-Type": "text/plain" });
+
+      res.end(code === 0 ? "" : `ffmpeg exited with code ${code}: ${stderr}`);
+
+      return;
+
+    }
+
+    if (!res.destroyed) {
+
+      res.end();
+
+    }
+
+  });
+
+  req.on("close", closeFfmpeg);
+
+}
+
 
 
 const server = http.createServer((req, res) => {
@@ -635,7 +849,7 @@ const server = http.createServer((req, res) => {
 
 
 
-  if (requestUrl.pathname !== "/proxy") {
+  if (requestUrl.pathname !== "/proxy" && requestUrl.pathname !== "/jsmpeg") {
 
     res.writeHead(404, { ...corsHeaders(), "Content-Type": "text/plain" });
 
@@ -662,6 +876,14 @@ const server = http.createServer((req, res) => {
   }
 
 
+
+  if (requestUrl.pathname === "/jsmpeg") {
+
+    transcodeForJSMpeg(req, res, targetUrl);
+
+    return;
+
+  }
 
   proxyRequest(req, res, targetUrl);
 

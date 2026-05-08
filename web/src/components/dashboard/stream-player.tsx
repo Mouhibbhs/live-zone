@@ -81,12 +81,33 @@ function buildProxyUrl(proxyBase: string, url: string) {
   return proxyBase ? `${proxyBase}?url=${encodeURIComponent(url)}` : "";
 }
 
+function buildJSMpegTranscodeUrl(proxyBase: string, url: string) {
+  if (!proxyBase) return "";
+
+  try {
+    const parsed = new URL(proxyBase);
+    parsed.pathname = parsed.pathname.replace(/\/proxy\/?$/, "/jsmpeg");
+    return `${parsed.toString()}?url=${encodeURIComponent(url)}`;
+  } catch {
+    return proxyBase.replace(/\/proxy\/?$/, "/jsmpeg") + `?url=${encodeURIComponent(url)}`;
+  }
+}
+
 function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()): Strategy[] {
   const strategies: Strategy[] = [];
   const directTs = buildDirectUrl(streamUrl, "ts");
-  strategies.push({ kind: "jsmpeg", label: "Direct JSMpeg MPEG-TS", url: directTs });
 
   const proxyBases = getIptvProxyBases();
+  proxyBases.forEach((proxyBase, index) => {
+    strategies.push({
+      kind: "jsmpeg",
+      label: index === 0 ? "Transcoded JSMpeg" : `Transcoded JSMpeg fallback ${index}`,
+      url: buildJSMpegTranscodeUrl(proxyBase, directTs),
+    });
+  });
+
+  strategies.push({ kind: "jsmpeg", label: "Direct JSMpeg MPEG-TS", url: directTs });
+
   proxyBases.forEach((proxyBase, index) => {
     strategies.push({
       kind: "jsmpeg",
