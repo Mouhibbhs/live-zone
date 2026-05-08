@@ -77,10 +77,6 @@ function buildDirectUrl(streamUrl: string, ext: "ts") {
   return `${match[1]}.${ext}${match[2] ?? ""}`;
 }
 
-function buildProxyUrl(proxyBase: string, url: string) {
-  return proxyBase ? `${proxyBase}?url=${encodeURIComponent(url)}` : "";
-}
-
 function buildJSMpegTranscodeUrl(proxyBase: string, url: string) {
   if (!proxyBase) return "";
 
@@ -103,16 +99,6 @@ function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()
       kind: "jsmpeg",
       label: index === 0 ? "Transcoded JSMpeg" : `Transcoded JSMpeg fallback ${index}`,
       url: buildJSMpegTranscodeUrl(proxyBase, directTs),
-    });
-  });
-
-  strategies.push({ kind: "jsmpeg", label: "Direct JSMpeg MPEG-TS", url: directTs });
-
-  proxyBases.forEach((proxyBase, index) => {
-    strategies.push({
-      kind: "jsmpeg",
-      label: index === 0 ? "Proxy JSMpeg MPEG-TS" : `Proxy JSMpeg MPEG-TS fallback ${index}`,
-      url: buildProxyUrl(proxyBase, directTs),
     });
   });
 

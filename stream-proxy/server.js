@@ -4,6 +4,18 @@ const https = require("https");
 
 const { spawn } = require("child_process");
 
+let ffmpegStaticPath = "";
+
+try {
+
+  ffmpegStaticPath = require("ffmpeg-static") || "";
+
+} catch {
+
+  ffmpegStaticPath = "";
+
+}
+
 
 
 const PORT = Number(process.env.PORT || process.env.PROXY_PORT || 8787);
@@ -681,6 +693,10 @@ function transcodeForJSMpeg(req, res, targetUrl) {
 
     "0",
 
+    "-vf",
+
+    "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+
     "-c:a",
 
     "mp2",
@@ -701,11 +717,17 @@ function transcodeForJSMpeg(req, res, targetUrl) {
 
     "mpegts",
 
+    "-muxdelay",
+
+    "0.001",
+
     "-",
 
   );
 
-  const ffmpeg = spawn(process.env.FFMPEG_PATH || "ffmpeg", ffmpegArgs, {
+  const ffmpegPath = process.env.FFMPEG_PATH || ffmpegStaticPath || "ffmpeg";
+
+  const ffmpeg = spawn(ffmpegPath, ffmpegArgs, {
 
     stdio: ["ignore", "pipe", "pipe"],
 
