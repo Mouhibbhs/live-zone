@@ -34,11 +34,9 @@ function normalizeConfiguredProxyBase(proxyUrl: string): string {
 }
 
 export function getIptvProxyBases(): string[] {
-  const configuredProxy = IPTV_PROXY_URL ? normalizeConfiguredProxyBase(IPTV_PROXY_URL) : "";
-
   if (typeof window === "undefined") {
     // Server‑side: only use the configured proxy URL if present.
-    return configuredProxy ? [configuredProxy] : [];
+    return IPTV_PROXY_URL ? [normalizeConfiguredProxyBase(IPTV_PROXY_URL)] : [];
   }
 
   const host = window.location.hostname;
@@ -46,13 +44,12 @@ export function getIptvProxyBases(): string[] {
   // Netlify deployment – use only the Netlify function proxy.
   if (host.endsWith('.netlify.app')) {
     const netlifyProxy = getProductionProxyBase();
-    return [configuredProxy, netlifyProxy].filter(Boolean);
+    return netlifyProxy ? [netlifyProxy] : [];
   }
 
-  // Non‑Netlify environments – prefer a configured long-running proxy, then
-  // fall back to the Next.js API proxy when available.
+  // Non‑Netlify environments – use the Next.js API proxy.
   const nextJsProxy = `${window.location.origin}/api/proxy`;
-  return [configuredProxy, nextJsProxy].filter(Boolean);
+  return nextJsProxy ? [nextJsProxy] : [];
 }
 
 export function getIptvProxyBase(): string {

@@ -8,55 +8,37 @@ import type { LiveChannel } from "@/lib/types";
 import { getIptvProxyBases } from "@/lib/stream-url";
 
 // -----------------------------------------------------------------------------
-// Type definitions for JSMpeg (loaded as a browser script)
+// Type definitions for mpegts.js (used by the dynamic import)
 // -----------------------------------------------------------------------------
-type JSMpegPlayer = {
-  play(): void;
+type MpegtsPlayer = {
+  attachMediaElement(mediaElement: HTMLMediaElement): void;
+  load(): void;
+  play(): Promise<void>;
   pause(): void;
-  stop(): void;
+  unload(): void;
   destroy(): void;
-  paused: boolean;
-  currentTime: number;
-  volume: number;
+  on(event: string, callback: (...args: unknown[]) => void): void;
 };
 
-type JSMpegOptions = {
-  canvas: HTMLCanvasElement;
-  autoplay?: boolean;
-  loop?: boolean;
-  audio?: boolean;
-  video?: boolean;
-  pauseWhenHidden?: boolean;
-  progressive?: boolean;
-  throttled?: boolean;
-  videoBufferSize?: number;
-  audioBufferSize?: number;
-  onSourceEstablished?: () => void;
-  onSourceCompleted?: () => void;
-  onVideoDecode?: () => void;
-  onStalled?: () => void;
-  onEnded?: () => void;
-};
-
-type JSMpegModule = {
-  Player: new (url: string, options: JSMpegOptions) => JSMpegPlayer;
+type MpegtsModule = {
+  createPlayer(
+    dataSource: { type: string; url: string; isLive?: boolean },
+    config?: Record<string, unknown>,
+  ): MpegtsPlayer;
+  isSupported(): boolean;
+  Events: {
+    ERROR: string;
+  };
 };
 
 type Strategy = {
-  kind: "jsmpeg";
+  kind: "mpegts";
   label: string;
   url: string;
 };
 
-declare global {
-  interface Window {
-    JSMpeg?: JSMpegModule;
-    __livezoneJSMpegLoader?: Promise<JSMpegModule>;
-  }
-}
-
 // -----------------------------------------------------------------------------
-// Utility functions
+// Utility functions (unchanged)
 // -----------------------------------------------------------------------------
 const XTREAM_LIVE_STREAM_PATTERN =
   /^(https?:\/\/.+\/live\/[^/]+\/[^/]+\/[^/.?]+)(?:\.(?:m3u8|ts|m2ts|flv))?(\?.*)?$/i;
@@ -77,28 +59,21 @@ function buildDirectUrl(streamUrl: string, ext: "ts") {
   return `${match[1]}.${ext}${match[2] ?? ""}`;
 }
 
-function buildJSMpegTranscodeUrl(proxyBase: string, url: string) {
-  if (!proxyBase) return "";
-
-  try {
-    const parsed = new URL(proxyBase);
-    parsed.pathname = parsed.pathname.replace(/\/proxy\/?$/, "/jsmpeg");
-    return `${parsed.toString()}?url=${encodeURIComponent(url)}`;
-  } catch {
-    return proxyBase.replace(/\/proxy\/?$/, "/jsmpeg") + `?url=${encodeURIComponent(url)}`;
-  }
+function buildProxyUrl(proxyBase: string, url: string) {
+  return proxyBase ? `${proxyBase}?url=${encodeURIComponent(url)}` : "";
 }
 
 function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()): Strategy[] {
   const strategies: Strategy[] = [];
   const directTs = buildDirectUrl(streamUrl, "ts");
+  strategies.push({ kind: "mpegts", label: "Direct MPEG-TS", url: directTs });
 
   const proxyBases = getIptvProxyBases();
   proxyBases.forEach((proxyBase, index) => {
     strategies.push({
-      kind: "jsmpeg",
-      label: index === 0 ? "Transcoded JSMpeg" : `Transcoded JSMpeg fallback ${index}`,
-      url: buildJSMpegTranscodeUrl(proxyBase, directTs),
+      kind: "mpegts",
+      label: index === 0 ? "Proxy MPEG-TS" : `Proxy MPEG-TS fallback ${index}`,
+      url: buildProxyUrl(proxyBase, directTs),
     });
   });
 
@@ -109,110 +84,83 @@ function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()
   return available.length > 0 ? available : unique;
 }
 
-const JSMPEG_SCRIPT_URL = "https://cdn.jsdelivr.net/gh/phoboslab/jsmpeg@master/jsmpeg.min.js";
-
-function loadJSMpegModule(): Promise<JSMpegModule> {
-  if (typeof window === "undefined") {
-    return Promise.reject(new Error("JSMpeg can only load in the browser."));
+async function loadMpegtsModule(): Promise<MpegtsModule | null> {
+  try {
+    // If you want to use your local file instead, replace this with:
+    // const lib = (window as any).mpegts; return lib?.isSupported() ? lib : null;
+    const module = await import("mpegts.js");
+    const lib = (module.default ?? module) as unknown as MpegtsModule;
+    return lib.isSupported() ? lib : null;
+  } catch {
+    return null;
   }
-
-  if (window.JSMpeg?.Player) {
-    return Promise.resolve(window.JSMpeg);
-  }
-
-  if (!window.__livezoneJSMpegLoader) {
-    window.__livezoneJSMpegLoader = new Promise((resolve, reject) => {
-      const existing = document.querySelector<HTMLScriptElement>(
-        `script[src="${JSMPEG_SCRIPT_URL}"]`,
-      );
-
-      const handleLoad = () => {
-        if (window.JSMpeg?.Player) {
-          resolve(window.JSMpeg);
-        } else {
-          window.__livezoneJSMpegLoader = undefined;
-          reject(new Error("JSMpeg loaded without exposing JSMpeg.Player."));
-        }
-      };
-
-      if (existing) {
-        if (existing.dataset.loaded === "true" || window.JSMpeg?.Player) {
-          window.setTimeout(handleLoad, 0);
-          return;
-        }
-        existing.addEventListener("load", handleLoad, { once: true });
-        existing.addEventListener(
-          "error",
-          () => {
-            window.__livezoneJSMpegLoader = undefined;
-            reject(new Error("Failed to load JSMpeg."));
-          },
-          { once: true },
-        );
-        return;
-      }
-
-      const script = document.createElement("script");
-      script.src = JSMPEG_SCRIPT_URL;
-      script.async = true;
-      script.onload = () => {
-        script.dataset.loaded = "true";
-        handleLoad();
-      };
-      script.onerror = () => {
-        window.__livezoneJSMpegLoader = undefined;
-        reject(new Error("Failed to load JSMpeg."));
-      };
-      document.head.appendChild(script);
-    });
-  }
-
-  return window.__livezoneJSMpegLoader;
 }
 
 // -----------------------------------------------------------------------------
 // Main Component
 // -----------------------------------------------------------------------------
 export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const jsmpegRef = useRef<JSMpegPlayer | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const mpegtsRef = useRef<MpegtsPlayer | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const recoveryCountRef = useRef(0);
   const loadingRef = useRef(false);
   const currentStrategyRef = useRef<Strategy | null>(null);
   const skippedStrategyUrlsRef = useRef<Set<string>>(new Set());
   const lastChannelKeyRef = useRef("");
-  const lastDecodedAtRef = useRef(0);
   const [status, setStatus] = useState("Idle");
   const [playbackNonce, setPlaybackNonce] = useState(0);
 
+  // DVR delay (play 20s behind live edge)
+  const LIVE_DELAY = 20;
+
   useEffect(() => {
     let cancelled = false;
-    const canvas = canvasRef.current;
+    const video = videoRef.current;
     const channelKey = channel ? `${channel.id}:${channel.streamUrl}` : "";
 
-    // Always-on playback loop for streams that briefly pause after stalls.
-    const forcePlayInterval = window.setInterval(() => {
-      const player = jsmpegRef.current;
-      if (!player || cancelled || !player.paused) return;
-      try {
-        player.play();
-      } catch {
-        // JSMpeg may reject playback when the source is already gone; recovery handles it.
-      }
-    }, 500);
 
+    // Always‑on playback (infinity loop)
+    const forcePlayInterval = window.setInterval(() => {
+      if (!video || cancelled) return;
+      if (video.paused) {
+        video.play().catch(() => {});
+      }
+    }, 200);
+
+    // Block spacebar pause when video is focused
+    const blockKeys = (e: KeyboardEvent) => {
+      if (e.code === "Space" && e.target === video) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("keydown", blockKeys);
+
+    // Reset state when channel changes
     if (channelKey !== lastChannelKeyRef.current) {
       lastChannelKeyRef.current = channelKey;
       recoveryCountRef.current = 0;
       skippedStrategyUrlsRef.current = new Set();
-      lastDecodedAtRef.current = 0;
     }
 
     const clearReconnectTimer = () => {
       if (reconnectTimerRef.current) {
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
+      }
+    };
+
+    // Soft reconnect (unload → load → play) – never destroy
+    const softReconnect = (): boolean => {
+      const player = mpegtsRef.current;
+      if (!player || !video) return false;
+      try {
+        player.unload();
+        player.load();
+        void player.play().catch(() => {});
+        return true;
+      } catch {
+        return false;
       }
     };
 
@@ -229,6 +177,12 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         return;
       }
 
+      // Try soft reconnect first
+      if (!skipCurrentStrategy && softReconnect()) {
+        setStatus(`Reconnected: ${reason}`);
+        return;
+      }
+
       recoveryCountRef.current += 1;
       loadingRef.current = true;
       setStatus(`Recovering (${recoveryCountRef.current}/10): ${reason}`);
@@ -240,19 +194,26 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
     const cleanup = () => {
       clearReconnectTimer();
-      if (jsmpegRef.current) {
+      if (mpegtsRef.current) {
         try {
-          jsmpegRef.current.pause();
-          jsmpegRef.current.destroy();
+          mpegtsRef.current.pause();
+          mpegtsRef.current.unload();
+          mpegtsRef.current.destroy();
         } catch {}
-        jsmpegRef.current = null;
+        mpegtsRef.current = null;
+      }
+      if (video) {
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
       }
     };
 
-    const tryJSMpeg = async (strategy: Strategy) => {
-      if (!canvas) throw new Error("Canvas element not ready.");
+    const tryMpegts = async (strategy: Strategy) => {
+      if (!video) throw new Error("Video element not ready.");
 
-      const lib = await loadJSMpegModule();
+      const lib = await loadMpegtsModule();
+      if (!lib) throw new Error("mpegts.js not available.");
 
       cleanup();
       setStatus(`Trying ${strategy.label}...`);
@@ -260,73 +221,105 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       await new Promise<void>((resolve, reject) => {
         let started = false;
         let settled = false;
-        let player: JSMpegPlayer | null = null;
+
+        const player = lib.createPlayer(
+          { type: "mse", url: strategy.url, isLive: true },
+          {
+            enableWorker: true,
+
+            enableStashBuffer: true,
+            stashInitialSize: 1024 * 1024 * 2 ,
+            ioBufferSize: 1024 * 1024 * 8,
+
+            isLive: true,
+
+            liveBufferLatencyChasing: false,
+            liveBufferLatencyMaxLatency: 60,
+            liveBufferLatencyMinRemain: 10,
+
+            lazyLoad: false,
+
+            autoCleanupSourceBuffer: false,
+            autoCleanupMaxBackwardDuration: 10,
+            autoCleanupMinBackwardDuration: 5,
+
+            reuseRedirectedURL: true,
+
+            statisticsInfoReportInterval: 600,
+          },
+        );
+        mpegtsRef.current = player;
 
         const settleSuccess = () => {
           if (settled) return;
           settled = true;
           started = true;
-          lastDecodedAtRef.current = Date.now();
           window.clearTimeout(timeoutId);
+          video.removeEventListener("playing", settleSuccess);
+          video.removeEventListener("canplay", settleSuccess);
+          video.removeEventListener("loadeddata", settleSuccess);
           resolve();
         };
 
         const timeoutId = window.setTimeout(() => {
+          if (
+            video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA ||
+            video.buffered.length > 0
+          ) {
+            settleSuccess();
+            return;
+          }
           reject(new Error(`${strategy.label} timed out.`));
         }, 30000);
 
-        try {
-          player = new lib.Player(strategy.url, {
-            canvas,
-            autoplay: true,
-            loop: false,
-            audio: true,
-            video: true,
-            pauseWhenHidden: false,
-            progressive: true,
-            throttled: false,
-            videoBufferSize: 1024 * 1024 * 4,
-            audioBufferSize: 1024 * 512,
-            onSourceEstablished: () => {
-              if (!settled) setStatus(`${strategy.label} source connected...`);
-            },
-            onVideoDecode: () => {
-              lastDecodedAtRef.current = Date.now();
-              settleSuccess();
-            },
-            onStalled: () => {
-              if (started && !cancelled) scheduleRecovery("stream stalled", false);
-            },
-            onEnded: () => {
-              if (started && !cancelled) scheduleRecovery("stream ended", false);
-            },
-            onSourceCompleted: () => {
-              if (started && !cancelled) scheduleRecovery("source completed", false);
-            },
-          });
-          player.volume = 1;
-          jsmpegRef.current = player;
-          player.play();
-        } catch (error) {
+        video.addEventListener("playing", settleSuccess, { once: true });
+        video.addEventListener("canplay", settleSuccess, { once: true });
+        video.addEventListener("loadeddata", settleSuccess, { once: true });
+
+        player.on(lib.Events.ERROR, (...args: unknown[]) => {
+          const detail = typeof args[1] === "string" ? args[1] : "mpegts error";
+          if (started) {
+            if (!softReconnect()) scheduleRecovery(detail, false);
+            return;
+          }
           window.clearTimeout(timeoutId);
-          reject(error);
-        }
+          video.removeEventListener("playing", settleSuccess);
+          video.removeEventListener("canplay", settleSuccess);
+          video.removeEventListener("loadeddata", settleSuccess);
+          reject(new Error(`${strategy.label} failed: ${detail}`));
+        });
+
+        // Seamless reload when stream ends (MediaSource ended)
+        player.on("ended", () => {
+          if (started && !cancelled) softReconnect();
+        });
+
+        player.attachMediaElement(video);
+        player.load();
+        void player.play().catch(() => {});
       });
     };
 
     const startPlayback = async () => {
-      if (!canvas || !channel) return;
+      if (!video || !channel) return;
       loadingRef.current = true;
       setStatus("Preparing stream...");
 
-      const strategies = buildStrategies(channel.streamUrl, skippedStrategyUrlsRef.current);
+      video.muted = false;
+      video.autoplay = true;
+      video.playsInline = true;
+
+      const strategies = buildStrategies(
+        channel.streamUrl,
+        skippedStrategyUrlsRef.current,
+      );
       let lastError = "No playable stream source found.";
 
       for (const strategy of strategies) {
         if (cancelled) return;
         try {
           currentStrategyRef.current = strategy;
-          await tryJSMpeg(strategy);
+          await tryMpegts(strategy);
           if (!cancelled) {
             loadingRef.current = false;
             recoveryCountRef.current = 0;
@@ -345,35 +338,86 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       }
     };
 
-    if (!channel || !canvas) {
+    if (!channel || !video) {
       cleanup();
       return () => {
         cancelled = true;
-        window.clearInterval(forcePlayInterval);
         cleanup();
       };
     }
 
     void startPlayback();
 
-    // Freeze detection: JSMpeg renders to canvas, so decoded frames are the heartbeat.
-    const freezeMonitor = window.setInterval(() => {
-      if (cancelled || loadingRef.current || !jsmpegRef.current || lastDecodedAtRef.current === 0) {
-        return;
-      }
-      if (Date.now() - lastDecodedAtRef.current > 15000) {
-        scheduleRecovery("stream frozen", false);
-      }
+    // Smart live‑edge monitor (playback rate tweak)
+    const liveEdgeMonitor = window.setInterval(() => {
+      if (!video || cancelled || video.paused || loadingRef.current) return;
+      try {
+        if (video.seekable.length > 0) {
+          const liveEdge = video.seekable.end(0);
+          const distance = liveEdge - video.currentTime;
+          video.playbackRate = distance < 3 ? 0.97 : 1.0;
+        }
+      } catch {}
     }, 5000);
 
+    // Freeze detection (8 seconds)
+    let lastCurrentTime = video.currentTime;
+    const freezeMonitor = window.setInterval(() => {
+      if (!video || cancelled || video.paused || loadingRef.current) {
+        lastCurrentTime = video?.currentTime ?? 0;
+        return;
+      }
+      if (video.currentTime === lastCurrentTime) {
+        if (!softReconnect()) scheduleRecovery("stream frozen", false);
+      }
+      lastCurrentTime = video.currentTime;
+    }, 8000);
+
+    const onWaiting = () => {
+      window.setTimeout(() => {
+        if (
+          !cancelled &&
+          video &&
+          !video.paused &&
+          video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA
+        ) {
+          scheduleRecovery("waiting for data", false);
+        }
+      }, 25000);
+    };
+
+    const onEnded = () => {
+      if (mpegtsRef.current) {
+        if (!softReconnect()) scheduleRecovery("stream ended", false);
+      } else {
+        scheduleRecovery("stream ended", false);
+      }
+    };
+
+    const onVideoError = () =>
+      scheduleRecovery(video.error?.message || "video error", false);
+
+    video.addEventListener("waiting", onWaiting);
+    video.addEventListener("stalled", onWaiting);
+    video.addEventListener("ended", onEnded);
+    video.addEventListener("error", onVideoError);
+
+    // --- Final cleanup on unmount / dependency change ---
     return () => {
       cancelled = true;
       window.clearInterval(forcePlayInterval);
+      window.clearInterval(liveEdgeMonitor);
       window.clearInterval(freezeMonitor);
+      video.removeEventListener("waiting", onWaiting);
+      video.removeEventListener("stalled", onWaiting);
+      video.removeEventListener("ended", onEnded);
+      video.removeEventListener("error", onVideoError);
+      window.removeEventListener("keydown", blockKeys);
       cleanup();
     };
   }, [channel?.id, channel?.streamUrl, playbackNonce]);
 
+  // --- UI (unchanged) ---
   if (!channel) {
     return (
       <div className="player-shell-empty">
@@ -389,7 +433,16 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   return (
     <div className="player-shell livezone-player">
       <div className="player-video-frame">
-        <canvas ref={canvasRef} className="player-video" />
+        <video
+          ref={videoRef}
+          className="player-video"
+          autoPlay
+          muted
+          controls
+          playsInline
+          preload="metadata"
+          controlsList="nopause noplaybackrate"
+        />
       </div>
       <div className="player-footer">
         <div className="player-current-info">
@@ -399,7 +452,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         </div>
         <div className="player-controls-hint">
           <Radio size={16} />
-          JSMpeg live canvas playback
+          Autoplay muted. Use controls for sound.
         </div>
       </div>
       <style jsx>{`
