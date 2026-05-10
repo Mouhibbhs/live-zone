@@ -110,130 +110,8 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const currentStrategyRef = useRef<Strategy | null>(null);
   const skippedStrategyUrlsRef = useRef<Set<string>>(new Set());
   const lastChannelKeyRef = useRef("");
-  const lastDataTimestampRef = useRef<number>(Date.now());
   const [status, setStatus] = useState("Idle");
   const [playbackNonce, setPlaybackNonce] = useState(0);
-
-  const updateLastDataTimestamp = () => {
-    lastDataTimestampRef.current = Date.now();
-  };
-
-  // Hard reload for MPEG-TS (destroys and recreates player)
-  const hardReloadMpegts = (reason: string) => {
-    if (!videoRef.current || !currentStrategyRef.current) return false;
-    if (loadingRef.current) return false;
-
-    console.log(`[MPEG-TS] Hard reload: ${reason}`);
-    setStatus(`Recovering: ${reason}`);
-    loadingRef.current = true;
-
-    // Destroy current MPEG-TS player
-    if (mpegtsRef.current) {
-      try {
-        mpegtsRef.current.pause();
-        mpegtsRef.current.unload();
-        mpegtsRef.current.destroy();
-      } catch (e) {
-        console.warn("Error destroying MPEG-TS player", e);
-      }
-      mpegtsRef.current = null;
-    }
-
-    // Reset video src to clear any pending state
-    const video = videoRef.current;
-    video.pause();
-    video.removeAttribute("src");
-    video.load();
-
-    const url = currentStrategyRef.current.url;
-    if (!url) return false;
-
-    setTimeout(() => {
-      if (!videoRef.current) {
-        loadingRef.current = false;
-        return;
-      }
-      loadMpegtsModule()
-        .then((module) => {
-          if (!module) {
-            loadingRef.current = false;
-            setStatus("mpegts.js not available");
-            return;
-          }
-          
-          // 🚀 OPTIMIZED CONFIGURATION FOR INFINITE LIVE STREAM
-          const player = module.createPlayer(
-            { type: "mse", url: url, isLive: true },
-            {
-              // Core live settings
-              isLive: true,
-              liveBufferLatencyChasing: true,   // aggressively follow live edge
-              liveBufferLatencyMaxLatency: 8,    // max 8s behind live
-              liveBufferLatencyMinRemain: 1.5,   // keep only 1.5s buffer
-              
-              // Buffer control – prevents chunk accumulation
-              enableStashBuffer: true,
-              stashInitialSize: 256 * 1024,      // 256KB initial stash
-              ioBufferSize: 2 * 1024 * 1024,     // 2MB I/O buffer
-              
-              // Network & retry – never give up
-              reuseRedirectedURL: false,         // always fetch fresh URL
-              reconnectInterval: 2,              // retry every 2 sec
-              reconnectDecay: 1.5,               // exponential backoff
-              maxReconnectAttempts: Infinity,    // never stop trying
-              
-              // Cleanup to prevent memory bloat
-              autoCleanupSourceBuffer: true,
-              autoCleanupMaxBackwardDuration: 10, // keep only 10s behind
-              autoCleanupMinBackwardDuration: 2,
-              
-              // Performance
-              enableWorker: false,               // workers can cause stalls
-              lazyLoad: false,                   // never pause loading
-              statisticsInfoReportInterval: 1000,
-            }
-          );
-          mpegtsRef.current = player;
-
-          // Force video element to ignore 'ended'
-          if (videoRef.current) {
-            videoRef.current.onended = () => {
-              console.warn("[MPEG-TS] video.onended – forcing reload");
-              hardReloadMpegts("video ended");
-            };
-          }
-
-          player.on(module.Events.ERROR, (...args: unknown[]) => {
-            const errMsg = typeof args[1] === "string" ? args[1] : "mpegts error";
-            console.warn("[MPEG-TS] Error:", errMsg);
-            hardReloadMpegts(`error: ${errMsg}`);
-          });
-
-          player.on("ended", () => {
-            console.warn("[MPEG-TS] player ended – reloading");
-            hardReloadMpegts("player ended");
-          });
-
-          player.on("statistics_info", (stats: any) => {
-            if (stats && stats.currentBytes) updateLastDataTimestamp();
-          });
-
-          if (videoRef.current) {
-            player.attachMediaElement(videoRef.current);
-            player.load();
-            player.play().catch((err) => console.warn("play() failed", err));
-          }
-          loadingRef.current = false;
-          setStatus("Live");
-        })
-        .catch(() => {
-          loadingRef.current = false;
-          setStatus("Reload failed");
-        });
-    }, 100);
-
-    return true;
-  };
 
   useEffect(() => {
     let cancelled = false;
@@ -270,7 +148,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       }
     };
 
-    const scheduleRecovery = async (reason: string, skipCurrentStrategy = false) => {
+    const scheduleRecovery = (reason: string, skipCurrentStrategy = false) => {
       if (cancelled || reconnectTimerRef.current) return;
 
       if (skipCurrentStrategy && currentStrategyRef.current) {
@@ -283,9 +161,13 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         return;
       }
 
-      // Always use hard reload for MPEG-TS
-      hardReloadMpegts(reason);
       recoveryCountRef.current += 1;
+      loadingRef.current = true;
+      setStatus(`Recovering (${recoveryCountRef.current}/10): ${reason}`);
+      reconnectTimerRef.current = window.setTimeout(() => {
+        reconnectTimerRef.current = null;
+        setPlaybackNonce((v) => v + 1);
+      }, 2000);
     };
 
     const cleanup = () => {
@@ -312,44 +194,24 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
       cleanup();
       setStatus(`Trying ${strategy.label}...`);
-      updateLastDataTimestamp();
 
       return new Promise<void>((resolve, reject) => {
         let started = false;
         let settled = false;
 
-        // 🚀 OPTIMIZED CONFIGURATION (same as hard reload)
+        // SIMPLE, RELIABLE CONFIGURATION (no aggressive timeouts)
         const player = lib.createPlayer(
           { type: "mse", url: strategy.url, isLive: true },
           {
             isLive: true,
-            liveBufferLatencyChasing: true,
-            liveBufferLatencyMaxLatency: 8,
-            liveBufferLatencyMinRemain: 1.5,
+            enableWorker: true,
             enableStashBuffer: true,
-            stashInitialSize: 256 * 1024,
-            ioBufferSize: 2 * 1024 * 1024,
-            reuseRedirectedURL: false,
-            reconnectInterval: 2,
-            reconnectDecay: 1.5,
-            maxReconnectAttempts: Infinity,
-            autoCleanupSourceBuffer: true,
-            autoCleanupMaxBackwardDuration: 10,
-            autoCleanupMinBackwardDuration: 2,
-            enableWorker: false,
+            stashInitialSize: 1024 * 1024, // 1MB
             lazyLoad: false,
-            statisticsInfoReportInterval: 1000,
+            reuseRedirectedURL: true,
           }
         );
         mpegtsRef.current = player;
-
-        // Force video element to ignore 'ended'
-        if (video) {
-          video.onended = () => {
-            console.warn("[MPEG-TS] video.onended – forcing reload");
-            hardReloadMpegts("video ended");
-          };
-        }
 
         const settleSuccess = () => {
           if (settled) return;
@@ -371,7 +233,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
             return;
           }
           reject(new Error(`${strategy.label} timed out`));
-        }, 20000);
+        }, 30000);
 
         video.addEventListener("playing", settleSuccess, { once: true });
         video.addEventListener("canplay", settleSuccess, { once: true });
@@ -380,7 +242,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         player.on(lib.Events.ERROR, (...args: unknown[]) => {
           const detail = typeof args[1] === "string" ? args[1] : "mpegts error";
           if (started) {
-            hardReloadMpegts(detail);
+            scheduleRecovery(detail, false);
             return;
           }
           clearTimeout(timeoutId);
@@ -390,15 +252,12 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           reject(new Error(`${strategy.label} failed: ${detail}`));
         });
 
+        // Seamless reload when stream ends
         player.on("ended", () => {
-          console.warn("[MPEG-TS] player ended – reloading");
           if (started && !cancelled) {
-            hardReloadMpegts("ended");
+            console.log("[MPEG-TS] Stream ended, reloading...");
+            scheduleRecovery("stream ended", false);
           }
-        });
-
-        player.on("statistics_info", (stats: any) => {
-          if (stats && stats.currentBytes) updateLastDataTimestamp();
         });
 
         player.attachMediaElement(video);
@@ -430,8 +289,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           if (!cancelled) {
             loadingRef.current = false;
             recoveryCountRef.current = 0;
-            setStatus(`${strategy.label} live`);
-            updateLastDataTimestamp();
+            setStatus(`${strategy.label} connected`);
           }
           return;
         } catch (err) {
@@ -456,66 +314,71 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
     void startPlayback();
 
-    // Data timeout monitor – if no data for 8 seconds, force reload
-    const dataTimeoutInterval = setInterval(() => {
-      if (cancelled || loadingRef.current) return;
-      if (!video || video.paused) return;
-      
-      const now = Date.now();
-      const timeSinceLastData = now - lastDataTimestampRef.current;
-      if (timeSinceLastData > 8000 && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-        console.warn(`[MPEG-TS] No data for ${timeSinceLastData}ms → reload`);
-        hardReloadMpegts("data timeout");
-        updateLastDataTimestamp();
-      }
-    }, 4000);
-
-    // Live edge monitor (playback rate tweak)
-    const liveEdgeMonitor = setInterval(() => {
+    // Live edge monitor (gentle playback rate adjustment)
+    const liveEdgeMonitor = window.setInterval(() => {
       if (!video || cancelled || video.paused || loadingRef.current) return;
       try {
         if (video.seekable.length > 0) {
           const liveEdge = video.seekable.end(0);
           const distance = liveEdge - video.currentTime;
-          if (distance > 5) {
-            video.currentTime = liveEdge - 2;
-          } else if (distance < 1.5) {
+          // Only adjust if we're too far behind or ahead
+          if (distance > 10) {
+            video.currentTime = liveEdge - 5;
+          } else if (distance < 2) {
             video.playbackRate = 1.0;
-          } else {
+          } else if (distance > 8) {
+            video.playbackRate = 1.02;
+          } else if (distance < 3) {
             video.playbackRate = 0.98;
+          } else {
+            video.playbackRate = 1.0;
           }
         }
       } catch {}
-    }, 3000);
+    }, 10000); // Check every 10 seconds (not aggressively)
 
-    // Freeze detection (6 seconds)
+    // Freeze detection (only check every 15 seconds)
     let lastCurrentTime = video.currentTime;
-    const freezeMonitor = setInterval(() => {
+    let lastTimeChange = Date.now();
+    const freezeMonitor = window.setInterval(() => {
       if (!video || cancelled || video.paused || loadingRef.current) {
         lastCurrentTime = video?.currentTime ?? 0;
+        lastTimeChange = Date.now();
         return;
       }
-      if (video.currentTime === lastCurrentTime && video.currentTime !== 0) {
-        hardReloadMpegts("freeze detected");
+      
+      const now = Date.now();
+      if (video.currentTime === lastCurrentTime) {
+        // If frozen for more than 15 seconds
+        if (now - lastTimeChange > 15000) {
+          scheduleRecovery("stream frozen", false);
+          lastTimeChange = now;
+        }
+      } else {
+        lastTimeChange = now;
       }
       lastCurrentTime = video.currentTime;
-    }, 6000);
+    }, 5000); // Check every 5 seconds
 
     const onWaiting = () => {
-      setTimeout(() => {
-        if (!cancelled && video && !video.paused && video.readyState < 3) {
-          hardReloadMpegts("waiting for data");
+      window.setTimeout(() => {
+        if (
+          !cancelled &&
+          video &&
+          !video.paused &&
+          video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA
+        ) {
+          scheduleRecovery("waiting for data", false);
         }
-      }, 10000);
+      }, 30000); // Wait 30 seconds before triggering recovery
     };
 
     const onEnded = () => {
-      hardReloadMpegts("ended event");
+      scheduleRecovery("stream ended", false);
     };
 
-    const onVideoError = () => {
-      hardReloadMpegts(video.error?.message || "video error");
-    };
+    const onVideoError = () =>
+      scheduleRecovery(video.error?.message || "video error", false);
 
     video.addEventListener("waiting", onWaiting);
     video.addEventListener("stalled", onWaiting);
@@ -524,10 +387,9 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
     return () => {
       cancelled = true;
-      clearInterval(forcePlayInterval);
-      clearInterval(dataTimeoutInterval);
-      clearInterval(liveEdgeMonitor);
-      clearInterval(freezeMonitor);
+      window.clearInterval(forcePlayInterval);
+      window.clearInterval(liveEdgeMonitor);
+      window.clearInterval(freezeMonitor);
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("stalled", onWaiting);
       video.removeEventListener("ended", onEnded);
