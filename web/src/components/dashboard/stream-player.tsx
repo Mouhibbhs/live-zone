@@ -28,6 +28,11 @@ type MpegtsModule = {
   isSupported(): boolean;
   Events: {
     ERROR: string;
+    MEDIA_ATTACHED: string;
+    METADATA_ARRIVED: string;
+    SCRIPTDATA_ARRIVED: string;
+    MEDIA_INFO: string;
+    STATISTICS_INFO: string;
   };
 };
 
@@ -68,7 +73,6 @@ function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()
   const directTs = buildDirectUrl(streamUrl, "ts");
   const proxyBases = getIptvProxyBases();
 
-  // Try proxy first (more reliable for CORS)
   proxyBases.forEach((proxyBase, index) => {
     strategies.push({
       kind: "mpegts",
@@ -77,7 +81,6 @@ function buildStrategies(streamUrl: string, skippedUrls: Set<string> = new Set()
     });
   });
   
-  // Direct as fallback
   strategies.push({ kind: "mpegts", label: "Direct MPEG-TS", url: directTs });
 
   const unique = strategies.filter(
@@ -113,20 +116,43 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const [status, setStatus] = useState("Idle");
   const [playbackNonce, setPlaybackNonce] = useState(0);
 
+  // Force seek to live edge every few seconds
+  const forceLiveEdge = (video: HTMLVideoElement) => {
+    try {
+      if (video.seekable.length > 0) {
+        const liveEdge = video.seekable.end(video.seekable.length - 1);
+        const distanceFromEdge = liveEdge - video.currentTime;
+        
+        // If we're more than 10 seconds behind live, jump to live edge
+        if (distanceFromEdge > 10) {
+          console.log(`[Player] Skipping from ${video.currentTime} to live edge ${liveEdge}`);
+          video.currentTime = liveEdge - 2; // 2 seconds behind live
+        }
+        
+        // If playback rate is negative or we're going backwards, fix it
+        if (video.playbackRate < 0 || video.currentTime < 0) {
+          video.currentTime = liveEdge - 2;
+        }
+      }
+    } catch (e) {
+      console.warn("[Player] Failed to seek to live edge", e);
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     const video = videoRef.current;
     const channelKey = channel ? `${channel.id}:${channel.streamUrl}` : "";
 
-    // Always-on playback (infinity loop)
+    // Force play every 2 seconds (prevents autoplay blocks)
     const forcePlayInterval = window.setInterval(() => {
       if (!video || cancelled) return;
-      if (video.paused && !loadingRef.current) {
+      if (video.paused && !loadingRef.current && video.readyState >= 2) {
         video.play().catch(() => {});
       }
-    }, 200);
+    }, 2000);
 
-    // Block spacebar pause when video is focused
+    // Block spacebar pause
     const blockKeys = (e: KeyboardEvent) => {
       if (e.code === "Space" && e.target === video) {
         e.preventDefault();
@@ -164,6 +190,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       recoveryCountRef.current += 1;
       loadingRef.current = true;
       setStatus(`Recovering (${recoveryCountRef.current}/10): ${reason}`);
+      clearReconnectTimer();
       reconnectTimerRef.current = window.setTimeout(() => {
         reconnectTimerRef.current = null;
         setPlaybackNonce((v) => v + 1);
@@ -199,16 +226,22 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
         let started = false;
         let settled = false;
 
-        // SIMPLE, RELIABLE CONFIGURATION (no aggressive timeouts)
+        // CRITICAL: Config to prevent looping and buffer issues
         const player = lib.createPlayer(
           { type: "mse", url: strategy.url, isLive: true },
           {
             isLive: true,
-            enableWorker: true,
+            enableWorker: false,           // Disable workers for better live sync
             enableStashBuffer: true,
-            stashInitialSize: 1024 * 1024, // 1MB
-            lazyLoad: false,
-            reuseRedirectedURL: true,
+            stashInitialSize: 512 * 1024,  // 512KB initial buffer (small)
+            lazyLoad: false,               // Never pause loading
+            reuseRedirectedURL: false,     // Always get fresh URL
+            autoCleanupSourceBuffer: true,
+            autoCleanupMaxBackwardDuration: 5,   // Only keep 5 seconds behind
+            autoCleanupMinBackwardDuration: 2,   // Keep at least 2 seconds
+            liveBufferLatencyChasing: true,      // Aggressively chase live edge
+            liveBufferLatencyMaxLatency: 4,      // Max 4 seconds behind live
+            liveBufferLatencyMinRemain: 1,       // Keep only 1 second buffer
           }
         );
         mpegtsRef.current = player;
@@ -221,6 +254,9 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           video.removeEventListener("playing", settleSuccess);
           video.removeEventListener("canplay", settleSuccess);
           video.removeEventListener("loadeddata", settleSuccess);
+          
+          // Force to live edge immediately after starting
+          setTimeout(() => forceLiveEdge(video), 100);
           resolve();
         };
 
@@ -241,6 +277,7 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
 
         player.on(lib.Events.ERROR, (...args: unknown[]) => {
           const detail = typeof args[1] === "string" ? args[1] : "mpegts error";
+          console.error("[MPEGTS] Error:", detail);
           if (started) {
             scheduleRecovery(detail, false);
             return;
@@ -252,17 +289,16 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           reject(new Error(`${strategy.label} failed: ${detail}`));
         });
 
-        // Seamless reload when stream ends
         player.on("ended", () => {
+          console.warn("[MPEGTS] Stream ended - recovering");
           if (started && !cancelled) {
-            console.log("[MPEG-TS] Stream ended, reloading...");
             scheduleRecovery("stream ended", false);
           }
         });
 
         player.attachMediaElement(video);
         player.load();
-        void player.play().catch(() => {});
+        void player.play().catch((err) => console.warn("Play failed", err));
       });
     };
 
@@ -289,10 +325,11 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           if (!cancelled) {
             loadingRef.current = false;
             recoveryCountRef.current = 0;
-            setStatus(`${strategy.label} connected`);
+            setStatus(`${strategy.label} live`);
           }
           return;
         } catch (err) {
+          console.error(`Failed with ${strategy.label}:`, err);
           skippedStrategyUrlsRef.current.add(strategy.url);
           lastError = err instanceof Error ? err.message : String(err);
         }
@@ -308,69 +345,71 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       cleanup();
       return () => {
         cancelled = true;
+        window.clearInterval(forcePlayInterval);
+        window.removeEventListener("keydown", blockKeys);
         cleanup();
       };
     }
 
     void startPlayback();
 
-    // Live edge monitor (gentle playback rate adjustment)
+    // Force live edge every 5 seconds (prevents falling behind and looping)
     const liveEdgeMonitor = window.setInterval(() => {
       if (!video || cancelled || video.paused || loadingRef.current) return;
       try {
-        if (video.seekable.length > 0) {
-          const liveEdge = video.seekable.end(0);
-          const distance = liveEdge - video.currentTime;
-          // Only adjust if we're too far behind or ahead
-          if (distance > 10) {
-            video.currentTime = liveEdge - 5;
-          } else if (distance < 2) {
-            video.playbackRate = 1.0;
-          } else if (distance > 8) {
-            video.playbackRate = 1.02;
-          } else if (distance < 3) {
-            video.playbackRate = 0.98;
-          } else {
-            video.playbackRate = 1.0;
+        forceLiveEdge(video);
+      } catch {}
+    }, 5000);
+
+    // Buffer monitor - clear buffer if it gets too large
+    const bufferMonitor = window.setInterval(() => {
+      if (!video || cancelled || loadingRef.current) return;
+      try {
+        if (video.buffered.length > 0) {
+          const bufferedEnd = video.buffered.end(video.buffered.length - 1);
+          const currentTime = video.currentTime;
+          const bufferAhead = bufferedEnd - currentTime;
+          
+          // If buffer is larger than 15 seconds, we're accumulating too much
+          if (bufferAhead > 15) {
+            console.log(`[Player] Buffer too large (${bufferAhead}s), seeking to live edge`);
+            forceLiveEdge(video);
           }
         }
       } catch {}
-    }, 10000); // Check every 10 seconds (not aggressively)
+    }, 10000);
 
-    // Freeze detection (only check every 15 seconds)
+    // Simple freeze detection (every 10 seconds)
     let lastCurrentTime = video.currentTime;
-    let lastTimeChange = Date.now();
+    let freezeCount = 0;
     const freezeMonitor = window.setInterval(() => {
       if (!video || cancelled || video.paused || loadingRef.current) {
         lastCurrentTime = video?.currentTime ?? 0;
-        lastTimeChange = Date.now();
+        freezeCount = 0;
         return;
       }
       
-      const now = Date.now();
       if (video.currentTime === lastCurrentTime) {
-        // If frozen for more than 15 seconds
-        if (now - lastTimeChange > 15000) {
+        freezeCount++;
+        if (freezeCount >= 3) { // Frozen for 30 seconds (3 * 10s)
           scheduleRecovery("stream frozen", false);
-          lastTimeChange = now;
+          freezeCount = 0;
         }
       } else {
-        lastTimeChange = now;
+        freezeCount = 0;
       }
       lastCurrentTime = video.currentTime;
-    }, 5000); // Check every 5 seconds
+    }, 10000);
 
     const onWaiting = () => {
-      window.setTimeout(() => {
-        if (
-          !cancelled &&
-          video &&
-          !video.paused &&
-          video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA
-        ) {
+      let waitingTimeout: NodeJS.Timeout;
+      waitingTimeout = setTimeout(() => {
+        if (!cancelled && video && !video.paused && video.readyState < 2) {
           scheduleRecovery("waiting for data", false);
         }
-      }, 30000); // Wait 30 seconds before triggering recovery
+      }, 15000);
+      
+      video?.addEventListener("playing", () => clearTimeout(waitingTimeout), { once: true });
     };
 
     const onEnded = () => {
@@ -380,20 +419,33 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     const onVideoError = () =>
       scheduleRecovery(video.error?.message || "video error", false);
 
+    // Monitor timeupdate to detect backwards playback
+    const onTimeUpdate = () => {
+      if (!video || cancelled) return;
+      // If current time goes backwards (looping), force to live edge
+      if (video.currentTime < lastCurrentTime && video.currentTime > 0) {
+        console.warn(`[Player] Detected rewinding from ${lastCurrentTime} to ${video.currentTime}`);
+        forceLiveEdge(video);
+      }
+    };
+
     video.addEventListener("waiting", onWaiting);
     video.addEventListener("stalled", onWaiting);
     video.addEventListener("ended", onEnded);
     video.addEventListener("error", onVideoError);
+    video.addEventListener("timeupdate", onTimeUpdate);
 
     return () => {
       cancelled = true;
       window.clearInterval(forcePlayInterval);
       window.clearInterval(liveEdgeMonitor);
+      window.clearInterval(bufferMonitor);
       window.clearInterval(freezeMonitor);
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("stalled", onWaiting);
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("error", onVideoError);
+      video.removeEventListener("timeupdate", onTimeUpdate);
       window.removeEventListener("keydown", blockKeys);
       cleanup();
     };
