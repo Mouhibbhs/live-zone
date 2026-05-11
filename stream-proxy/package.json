@@ -1,6 +1,7 @@
 {
   "name": "livezone-stream-proxy",
   "private": true,
+  "type": "module",
   "version": "1.0.0",
   "description": "Long-running IPTV stream proxy for LiveZone.",
   "main": "server.js",
