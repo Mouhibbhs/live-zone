@@ -25,17 +25,17 @@ export function getIptvProxyBases(): string[] {
   const isLocal = isLocalHost(host);
   const origin = window.location.origin;
 
-  // 1. User-configured proxy (highest priority)
-  // 2. Standard proxy path (Netlify edge function or local Next.js route)
-  // 3. Local standalone proxy (for dev)
-  const standardProxy = `${origin}/api/proxy`;
+  // 1. User-configured proxy (highest priority, e.g. from Netlify env vars)
+  // 2. Local standalone proxy (highest priority for local dev because it handles M3U8 rewriting)
+  // 3. Standard proxy path (Netlify edge function or local Next.js route)
   const localProxy = isLocal ? "http://localhost:8787/proxy" : "";
+  const standardProxy = `${origin}/api/proxy`;
   const netlifyFunctionProxy = host.endsWith(".netlify.app") ? `${origin}/.netlify/functions/proxy` : "";
 
   return [
     configuredProxy,
-    standardProxy,
     localProxy,
+    standardProxy,
     netlifyFunctionProxy
   ].filter(Boolean);
 }
