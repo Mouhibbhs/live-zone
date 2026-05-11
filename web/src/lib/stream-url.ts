@@ -9,25 +9,6 @@ function isLocalHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1";
 }
 
-function getProductionProxyBase(): string {
-  if (typeof window === "undefined") {
-    return "";
-  }
-
-  // When deployed on Netlify, use the Netlify function proxy path.
-  // Netlify functions are accessible under `/.netlify/functions/<function-name>`.
-  // The original server proxy was mounted at `/api/proxy` in the Next.js app.
-  // Netlify creates a function named `proxy` that mirrors this endpoint.
-  // Detect Netlify deployment via the hostname pattern (ends with `.netlify.app`).
-  const host = window.location.hostname;
-  if (host.endsWith(".netlify.app")) {
-    return `${window.location.origin}/.netlify/functions/proxy`;
-  }
-
-  // Default to the Next.js API route when not on Netlify.
-  return `${window.location.origin}/api/proxy`;
-}
-
 function normalizeConfiguredProxyBase(proxyUrl: string): string {
   // Ensure the URL ends with /proxy so the proxy endpoint is used correctly
   return proxyUrl.replace(/\/+$/,'').replace(/(\/proxy)?$/,'/proxy');
@@ -37,22 +18,26 @@ export function getIptvProxyBases(): string[] {
   const configuredProxy = IPTV_PROXY_URL ? normalizeConfiguredProxyBase(IPTV_PROXY_URL) : "";
 
   if (typeof window === "undefined") {
-    // Server‑side: only use the configured proxy URL if present.
     return configuredProxy ? [configuredProxy] : [];
   }
 
   const host = window.location.hostname;
+  const isLocal = isLocalHost(host);
+  const origin = window.location.origin;
 
-  // Netlify deployment – use only the Netlify function proxy.
-  if (host.endsWith('.netlify.app')) {
-    const netlifyProxy = getProductionProxyBase();
-    return [configuredProxy, netlifyProxy].filter(Boolean);
-  }
+  // 1. User-configured proxy (highest priority)
+  // 2. Standard proxy path (Netlify edge function or local Next.js route)
+  // 3. Local standalone proxy (for dev)
+  const standardProxy = `${origin}/api/proxy`;
+  const localProxy = isLocal ? "http://localhost:8787/proxy" : "";
+  const netlifyFunctionProxy = host.endsWith(".netlify.app") ? `${origin}/.netlify/functions/proxy` : "";
 
-  // Non‑Netlify environments – prefer a configured long-running proxy, then
-  // fall back to the Next.js API proxy when available.
-  const nextJsProxy = `${window.location.origin}/api/proxy`;
-  return [configuredProxy, nextJsProxy].filter(Boolean);
+  return [
+    configuredProxy,
+    standardProxy,
+    localProxy,
+    netlifyFunctionProxy
+  ].filter(Boolean);
 }
 
 export function getIptvProxyBase(): string {

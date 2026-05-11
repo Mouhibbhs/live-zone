@@ -1,12 +1,17 @@
 // StreamPlayer.tsx
 "use client";
 
-import { Radio, Tv2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Radio, Tv2, AlertCircle } from "lucide-react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import Hls from "hls.js";
 
 import type { LiveChannel } from "@/lib/types";
-import { getIptvProxyBases } from "@/lib/stream-url";
+import { 
+  getIptvProxyBases, 
+  normalizeLiveStreamUrl, 
+  isHlsPlaylistUrl, 
+  isMpegTsUrl 
+} from "@/lib/stream-url";
 
 // -----------------------------------------------------------------------------
 // Types
@@ -24,56 +29,30 @@ type MpegtsPlayer = {
 type MpegtsModule = {
   createPlayer(
     dataSource: { type: string; url: string; isLive?: boolean },
-    config?: Record<string, unknown>,
+    config?: Record<string, unknown>
   ): MpegtsPlayer;
   isSupported(): boolean;
   Events: { ERROR: string };
 };
 
 // -----------------------------------------------------------------------------
+// Constants
+// -----------------------------------------------------------------------------
+const MAX_RETRY_DELAY = 15000;
+const INITIAL_RETRY_DELAY = 1000;
+
+// -----------------------------------------------------------------------------
 // Utilities
 // -----------------------------------------------------------------------------
-const XTREAM_LIVE_STREAM_PATTERN =
-  /^(https?:\/\/.+\/live\/[^/]+\/[^/]+\/[^/.?]+)(?:\.(?:m3u8|ts|m2ts|flv))?(\?.*)?$/i;
-
-function unwrapProxyUrl(streamUrl: string) {
-  try {
-    const parsed = new URL(streamUrl);
-    return parsed.searchParams.get("url") || streamUrl;
-  } catch {
-    return streamUrl;
-  }
-}
-
-function buildDirectUrl(streamUrl: string, ext: "m3u8" | "ts") {
-  const trimmed = unwrapProxyUrl(streamUrl.trim());
-  const match = trimmed.match(XTREAM_LIVE_STREAM_PATTERN);
-  if (!match) return trimmed;
-  return `${match[1]}.${ext}${match[2] ?? ""}`;
-}
-
-function buildProxyUrl(proxyBase: string, url: string) {
-  return proxyBase ? `${proxyBase}?url=${encodeURIComponent(url)}` : "";
-}
-
-function getStreamUrl(streamUrl: string): string {
-  const directTs = buildDirectUrl(streamUrl, "ts");
-  const proxyBases = getIptvProxyBases();
-  // Prefer proxy if available (handles CORS and keeps connection alive)
-  if (proxyBases.length) {
-    return buildProxyUrl(proxyBases[0], directTs);
-  }
-  return directTs;
-}
-
 async function loadMpegtsModule(): Promise<MpegtsModule | null> {
   try {
     const module = await import("mpegts.js");
     const lib = (module.default ?? module) as unknown as MpegtsModule;
-    return lib.isSupported() ? lib : null;
-  } catch {
+    return lib && typeof lib.isSupported === "function" && lib.isSupported() ? lib : null;
+  } catch (err) {
+    console.warn("[Player] Failed to load mpegts.js module", err);
     const globalLib = (window as unknown as { mpegts?: MpegtsModule }).mpegts;
-    return globalLib?.isSupported() ? globalLib : null;
+    return globalLib && typeof globalLib.isSupported === "function" && globalLib.isSupported() ? globalLib : null;
   }
 }
 
@@ -84,143 +63,204 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const mpegtsRef = useRef<MpegtsPlayer | null>(null);
+  
   const [status, setStatus] = useState("Idle");
-  const [retryKey, setRetryKey] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+  const [isBuffering, setIsBuffering] = useState(false);
+
+  const cleanup = useCallback(() => {
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+    if (mpegtsRef.current) {
+      try {
+        mpegtsRef.current.pause();
+        mpegtsRef.current.unload();
+        mpegtsRef.current.destroy();
+      } catch (e) {
+        console.warn("[Player] Cleanup error", e);
+      }
+      mpegtsRef.current = null;
+    }
+    const video = videoRef.current;
+    if (video) {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    }
+  }, []);
+
+  const triggerRetry = useCallback(() => {
+    const delay = Math.min(INITIAL_RETRY_DELAY * Math.pow(1.5, retryCount), MAX_RETRY_DELAY);
+    console.log(`[Player] Retrying in ${Math.round(delay)}ms (attempt ${retryCount + 1})`);
+    
+    const timer = setTimeout(() => {
+      setRetryCount(c => c + 1);
+    }, delay);
+    
+    return () => clearTimeout(timer);
+  }, [retryCount]);
 
   useEffect(() => {
-    if (!channel) return;
+    if (!channel) {
+      cleanup();
+      setStatus("Idle");
+      setError(null);
+      setRetryCount(0);
+      return;
+    }
 
     let cancelled = false;
     const video = videoRef.current;
     if (!video) return;
 
-    const proxyUrl = getStreamUrl(channel.streamUrl);
-    console.log("[Player] Stream URL:", proxyUrl);
-
-    const isHls = proxyUrl.includes(".m3u8") || proxyUrl.includes("mpegurl");
-
-    const cleanup = () => {
-      if (hlsRef.current) {
-        hlsRef.current.destroy();
-        hlsRef.current = null;
-      }
-      if (mpegtsRef.current) {
-        try {
-          mpegtsRef.current.pause();
-          mpegtsRef.current.unload();
-          mpegtsRef.current.destroy();
-        } catch {}
-        mpegtsRef.current = null;
-      }
-      video.pause();
-      video.removeAttribute("src");
-      video.load();
-    };
+    // Detect format based on original URL
+    const originalUrl = channel.streamUrl;
+    const isHls = isHlsPlaylistUrl(originalUrl);
+    
+    // Normalize with appropriate extension
+    const proxyUrl = normalizeLiveStreamUrl(originalUrl, isHls ? "m3u8" : "ts");
+    
+    console.log(`[Player] Starting ${isHls ? 'HLS' : 'TS'} stream:`, proxyUrl);
 
     const startPlayer = async () => {
       cleanup();
+      setError(null);
+      setIsBuffering(true);
       setStatus("Connecting...");
 
       try {
         if (isHls && Hls.isSupported()) {
-          setStatus("Using HLS.js");
+          setStatus("Initialising HLS...");
           const hls = new Hls({
             enableWorker: true,
             lowLatencyMode: true,
-            liveSyncDurationCount: 2,          // stay close to live edge
-            liveMaxLatencyDurationCount: 6,
-            maxBufferLength: 10,               // small buffer to avoid stale data
-            maxMaxBufferLength: 20,
-            manifestLoadingTimeOut: 15000,
-            fragLoadingTimeOut: 20000,
-            debug: false,
+            liveSyncDurationCount: 3,
+            liveMaxLatencyDurationCount: 8,
+            maxBufferLength: 30,
+            maxMaxBufferLength: 60,
+            manifestLoadingTimeOut: 10000,
+            fragLoadingTimeOut: 15000,
+            manifestLoadingMaxRetry: 3,
+            levelLoadingMaxRetry: 3,
           });
+          
           hlsRef.current = hls;
+          
           hls.on(Hls.Events.ERROR, (_, data) => {
             if (data.fatal) {
-              console.error("[HLS] Fatal error:", data);
-              setStatus("HLS error, retrying...");
-              setRetryKey((k) => k + 1);
+              console.error("[HLS] Fatal error:", data.type, data.details);
+              if (cancelled) return;
+              
+              setError(`Connection failed: ${data.details}`);
+              setStatus("Retrying...");
+              triggerRetry();
             }
           });
+
           hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            if (cancelled) return;
             setStatus("Live");
-            video.play().catch((e) => console.warn("Autoplay blocked", e));
+            setIsBuffering(false);
+            video.play().catch(e => {
+              console.warn("[Player] Playback blocked", e);
+              setStatus("Paused (click to play)");
+            });
           });
+
           hls.loadSource(proxyUrl);
           hls.attachMedia(video);
+
         } else if (!isHls) {
-          // Fallback to mpegts.js for raw TS streams
+          setStatus("Initialising MPEG-TS...");
           const lib = await loadMpegtsModule();
-          if (!lib) throw new Error("mpegts.js not supported");
-          setStatus("Using MPEG-TS");
+          
+          if (!lib) {
+            throw new Error("MPEG-TS playback not supported in this browser");
+          }
+
           const player = lib.createPlayer(
             { type: "mse", url: proxyUrl, isLive: true },
             {
               isLive: true,
               enableWorker: true,
               enableStashBuffer: true,
-              stashInitialSize: 1024 * 1024,
+              stashInitialSize: 128 * 1024,
               lazyLoad: false,
               liveBufferLatencyChasing: true,
-              liveBufferLatencyMinRemain: 3,
-              reuseRedirectedURL: true,
+              liveBufferLatencyMinRemain: 2,
             }
           );
+          
           mpegtsRef.current = player;
-          player.on(lib.Events.ERROR, () => {
-            setStatus("TS error, reconnecting...");
-            setRetryKey((k) => k + 1);
+          
+          player.on(lib.Events.ERROR, (type, detail) => {
+            console.error("[TS] Player error:", type, detail);
+            if (cancelled) return;
+            setError(`TS error: ${detail}`);
+            triggerRetry();
           });
-          player.on("ended", () => {
-            setStatus("Stream ended, reconnecting...");
-            setRetryKey((k) => k + 1);
-          });
+
           player.attachMediaElement(video);
           player.load();
-          player.play().catch((e) => console.warn("Autoplay blocked", e));
+          player.play().catch(e => {
+            console.warn("[Player] Playback blocked", e);
+            setStatus("Paused");
+          });
+          
           setStatus("Live");
+          setIsBuffering(false);
         } else {
-          // Native HLS fallback (Safari)
+          // Native HLS (Safari)
+          setStatus("Using native HLS...");
           video.src = proxyUrl;
           video.load();
-          video.play().catch(() => setStatus("Click to play"));
-          setStatus("Live (native)");
+          video.play().catch(() => {
+            if (!cancelled) setStatus("Paused");
+          });
+          setStatus("Live");
+          setIsBuffering(false);
         }
       } catch (err: any) {
-        console.error("[Player] Init error:", err);
-        setStatus(`Error: ${err.message}`);
+        console.error("[Player] Initialization failed:", err);
+        if (!cancelled) {
+          setError(err.message || "Player initialization failed");
+          setStatus("Error");
+          triggerRetry();
+        }
       }
     };
 
     startPlayer();
 
-    // Keep-alive: reload if stream freezes for >15 seconds
+    // Health check: Detect frozen streams
     let lastTime = 0;
-    const interval = setInterval(() => {
-      if (!video || cancelled) return;
-      if (video.paused) return;
+    const checkInterval = setInterval(() => {
+      if (!video || video.paused || cancelled || isBuffering) return;
+      
       if (video.currentTime === lastTime && video.currentTime > 0) {
-        console.warn("[Player] Stream frozen, reloading...");
-        setRetryKey((k) => k + 1);
+        console.warn("[Player] Stream frozen, triggering recovery");
+        setError("Stream frozen");
+        triggerRetry();
       }
       lastTime = video.currentTime;
-    }, 10000);
+    }, 12000);
 
     return () => {
       cancelled = true;
-      clearInterval(interval);
-      cleanup();
+      clearInterval(checkInterval);
     };
-  }, [channel?.id, channel?.streamUrl, retryKey]);
+  }, [channel?.id, channel?.streamUrl, retryCount, cleanup, triggerRetry]);
 
   if (!channel) {
     return (
       <div className="player-shell-empty">
         <div className="player-empty-state">
-          <Tv2 size={64} />
-          <h3>No Channel Selected</h3>
-          <p>Select a channel from the sidebar</p>
+          <Tv2 size={64} strokeWidth={1.5} />
+          <h3>No channel selected</h3>
+          <p>Pick a stream from the drawer to begin playback</p>
         </div>
       </div>
     );
@@ -229,6 +269,21 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   return (
     <div className="player-shell livezone-player">
       <div className="player-video-frame">
+        {isBuffering && !error && (
+          <div className="player-loading-overlay">
+            <div className="loading-spinner" />
+            <p>{status}</p>
+          </div>
+        )}
+        
+        {error && (
+          <div className="player-error-overlay">
+            <AlertCircle size={32} />
+            <p>{error}</p>
+            <span>Retrying shortly...</span>
+          </div>
+        )}
+
         <video
           ref={videoRef}
           className="player-video"
@@ -236,44 +291,122 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           muted
           controls
           playsInline
-          preload="metadata"
-          controlsList="nopause noplaybackrate"
+          preload="auto"
+          onWaiting={() => setIsBuffering(true)}
+          onPlaying={() => {
+            setIsBuffering(false);
+            setError(null);
+          }}
+          controlsList="nodownload noremoteplayback"
         />
       </div>
+
       <div className="player-footer">
         <div className="player-current-info">
-          <p className="player-active-meta">Now playing</p>
+          <div className="player-status-tag">
+            <span className={`status-dot ${status === "Live" ? "active" : ""}`} />
+            {status}
+          </div>
           <h3 className="player-active-title">{channel.name}</h3>
-          <p className="player-active-copy">{status}</p>
         </div>
-        <div className="player-controls-hint">
-          <Radio size={16} />
-          {status.includes("Error") && (
-            <button
-              onClick={() => setRetryKey((k) => k + 1)}
-              style={{
-                background: "rgba(255,255,255,0.2)",
-                border: "none",
-                borderRadius: "4px",
-                padding: "2px 8px",
-                marginLeft: "8px",
-                cursor: "pointer",
-                color: "white",
-              }}
-            >
-              Retry
-            </button>
-          )}
+        
+        <div className="player-actions">
+          <button 
+            className="secondary-button icon-only" 
+            onClick={() => setRetryCount(c => c + 1)}
+            title="Refresh stream"
+          >
+            <Radio size={18} />
+          </button>
         </div>
       </div>
+
       <style jsx>{`
         .livezone-player {
-          border-radius: var(--radius-xl);
+          background: #000;
+          overflow: hidden;
+          position: relative;
         }
-        .player-controls-hint {
-          display: inline-flex;
+
+        .player-video-frame {
+          position: relative;
+          aspect-ratio: 16 / 9;
+          background: #000;
+        }
+
+        .player-video {
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+        }
+
+        .player-loading-overlay, .player-error-overlay {
+          position: absolute;
+          inset: 0;
+          z-index: 10;
+          background: rgba(0,0,0,0.7);
+          display: flex;
+          flex-direction: column;
           align-items: center;
-          gap: 0.55rem;
+          justify-content: center;
+          gap: 1rem;
+          color: white;
+          backdrop-filter: blur(4px);
+        }
+
+        .loading-spinner {
+          width: 40px;
+          height: 40px;
+          border: 3px solid rgba(255,255,255,0.1);
+          border-top-color: var(--primary, #00d9ff);
+          border-radius: 50%;
+          animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+
+        .player-status-tag {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          font-size: 0.75rem;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          color: #a0a0b0;
+          margin-bottom: 0.25rem;
+        }
+
+        .status-dot {
+          width: 6px;
+          height: 6px;
+          background: #404050;
+          border-radius: 50%;
+        }
+
+        .status-dot.active {
+          background: #00ff88;
+          box-shadow: 0 0 8px #00ff88;
+        }
+
+        .player-footer {
+          padding: 1.25rem;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          background: linear-gradient(to bottom, #1a1a2e, #161625);
+        }
+
+        .player-active-title {
+          margin: 0;
+          font-size: 1.1rem;
+          color: white;
+        }
+
+        .icon-only {
+          padding: 0.5rem;
+          border-radius: 50%;
         }
       `}</style>
     </div>
