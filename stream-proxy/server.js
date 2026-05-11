@@ -20,38 +20,45 @@ function rewritePlaylist(content, targetUrl, proxyBase, proxyPath) {
   const targetOrigin = targetParsed.origin;
   const targetPathBase = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
   
-  // Ensure we don't end up with // in the path
   const normalizedProxyPath = proxyPath.endsWith('/') ? proxyPath.slice(0, -1) : proxyPath;
-  const fullProxyBase = proxyBase + normalizedProxyPath;
+  const fullProxyBase = proxyBase + (normalizedProxyPath || '/proxy');
 
   return content.split(/\r?\n/).map(line => {
     const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) {
-      // Handle URI= in tags (like #EXT-X-KEY or #EXT-X-MAP)
+    if (!trimmed) return line;
+
+    if (trimmed.startsWith('#')) {
+      // Handle URI= in tags (like #EXT-X-STREAM-INF, #EXT-X-KEY, #EXT-X-MAP, #EXT-X-MEDIA)
       return line.replace(/URI="([^"]+)"/g, (match, uri) => {
         const absoluteUri = resolveUrl(uri, targetPathBase, targetOrigin);
         return `URI="${fullProxyBase}?url=${encodeURIComponent(absoluteUri)}"`;
       });
     }
 
-    // Rewrite segment URL
+    // Rewrite plain URL line (segments or variant playlists)
     const absoluteUri = resolveUrl(trimmed, targetPathBase, targetOrigin);
     return `${fullProxyBase}?url=${encodeURIComponent(absoluteUri)}`;
   }).join('\n');
 }
 
 const server = http.createServer(async (req, res) => {
-  // CORS headers
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Range',
-    'Access-Control-Expose-Headers': 'Content-Length, Content-Range',
+    'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges',
   };
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204, corsHeaders);
     res.end();
+    return;
+  }
+
+  // Basic health check
+  if (req.url === '/' || req.url === '/ping') {
+    res.writeHead(200, { 'Content-Type': 'text/plain', ...corsHeaders });
+    res.end('Proxy Alive');
     return;
   }
 
@@ -64,7 +71,10 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  console.log(`[PROXY] Request: ${targetUrl}`);
+  console.log(`[PROXY] Fetching: ${targetUrl}`);
+
+  const abortController = new AbortController();
+  req.on('close', () => abortController.abort());
 
   try {
     const response = await fetch(targetUrl, {
@@ -75,23 +85,22 @@ const server = http.createServer(async (req, res) => {
         'Referer': new URL(targetUrl).origin + '/',
         'Connection': 'keep-alive',
       },
-      redirect: 'follow'
+      redirect: 'follow',
+      signal: abortController.signal
     });
 
-    console.log(`[PROXY] Upstream: ${response.status} ${response.statusText} (${targetUrl})`);
-
     if (!response.ok) {
+      console.error(`[PROXY] Upstream Error: ${response.status} for ${targetUrl}`);
       res.writeHead(response.status, corsHeaders);
-      res.end(`Upstream error: ${response.statusText}`);
+      res.end(`Provider error: ${response.statusText}`);
       return;
     }
 
-    const contentType = response.headers.get('content-type') || '';
+    const contentType = (response.headers.get('content-type') || '').toLowerCase();
     const isM3u8 = targetUrl.toLowerCase().includes('.m3u8') || 
                    contentType.includes('mpegurl') || 
                    contentType.includes('m3u8');
 
-    // Copy CORS and Cache headers
     Object.entries(corsHeaders).forEach(([k, v]) => res.setHeader(k, v));
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 
@@ -105,40 +114,46 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200);
       res.end(rewritten);
     } else {
-      // Stream binary content
       if (contentType) res.setHeader('Content-Type', contentType);
       
-      // Forward size/range headers if present
+      // Essential headers for video segments
       ['content-length', 'content-range', 'accept-ranges'].forEach(h => {
         const val = response.headers.get(h);
         if (val) res.setHeader(h, val);
       });
 
-      // If it's a live stream (no content-length or large), use chunked
       if (!response.headers.has('content-length')) {
         res.setHeader('Transfer-Encoding', 'chunked');
       }
 
       res.writeHead(response.status);
       
-      // Convert Web Stream to Node Stream and pipe
+      // Optimized piping for binary streams
       const reader = response.body.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        res.write(value);
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          res.write(value);
+        }
+      } finally {
+        reader.releaseLock();
       }
       res.end();
     }
   } catch (error) {
-    console.error(`[PROXY] Fatal: ${error.message}`);
+    if (error.name === 'AbortError') {
+      console.log(`[PROXY] Aborted: ${targetUrl}`);
+      return;
+    }
+    console.error(`[PROXY] Fatal: ${error.message} (${targetUrl})`);
     if (!res.headersSent) {
       res.writeHead(502, corsHeaders);
-      res.end(`Proxy connection failed: ${error.message}`);
+      res.end(`Proxy error: ${error.message}`);
     }
   }
 });
 
 server.listen(PORT, () => {
-  console.log(`✅ Proxy running on port ${PORT}`);
+  console.log(`✅ LiveZone Proxy ready on port ${PORT}`);
 });
