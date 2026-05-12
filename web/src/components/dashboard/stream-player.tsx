@@ -136,15 +136,17 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           setStatus("Initialising HLS...");
           const hls = new Hls({
             enableWorker: true,
-            lowLatencyMode: true,
-            liveSyncDurationCount: 3,
-            liveMaxLatencyDurationCount: 8,
-            maxBufferLength: 30,
-            maxMaxBufferLength: 60,
-            manifestLoadingTimeOut: 10000,
-            fragLoadingTimeOut: 15000,
-            manifestLoadingMaxRetry: 3,
-            levelLoadingMaxRetry: 3,
+            lowLatencyMode: false, // Turn off low latency for better stability
+            liveSyncDurationCount: 5, // Increase buffer from 3 to 5 segments
+            liveMaxLatencyDurationCount: 12,
+            maxBufferLength: 60, // Increase max buffer
+            maxMaxBufferLength: 120,
+            manifestLoadingTimeOut: 20000, // Increase timeout to 20s for Render cold starts
+            fragLoadingTimeOut: 30000, // Increase fragment timeout to 30s
+            manifestLoadingMaxRetry: 6,
+            levelLoadingMaxRetry: 6,
+            fragLoadingMaxRetry: 6,
+            backBufferLength: 60,
           });
           
           hlsRef.current = hls;
