@@ -1,5 +1,5 @@
-// server.js – CommonJS version for Render.com (infinite live streaming)
-const http = require('http');
+// server.js – ES module version for Render.com (works with "type": "module")
+import http from 'http';
 
 const PORT = process.env.PORT || 3000;
 
@@ -70,8 +70,6 @@ const server = http.createServer(async (req, res) => {
 
   try {
     const target = new URL(targetUrl);
-    
-    // Transparently forward headers
     const headers = { ...req.headers };
     delete headers['host'];
     delete headers['connection'];
@@ -99,8 +97,8 @@ const server = http.createServer(async (req, res) => {
     }
 
     const contentType = (response.headers.get('content-type') || '').toLowerCase();
-    const isM3u8 = targetUrl.toLowerCase().includes('.m3u8') || 
-                   contentType.includes('mpegurl') || 
+    const isM3u8 = targetUrl.toLowerCase().includes('.m3u8') ||
+                   contentType.includes('mpegurl') ||
                    contentType.includes('m3u8');
 
     Object.entries(corsHeaders).forEach(([k, v]) => res.setHeader(k, v));
@@ -115,10 +113,10 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200);
       res.end(rewritten);
     } else {
-      // ========== LIVE MPEG-TS STREAM – NEVER CLOSE THE CONNECTION ==========
+      // LIVE MPEG-TS – never close the connection
       if (contentType) res.setHeader('Content-Type', contentType);
       res.setHeader('Transfer-Encoding', 'chunked');
-      res.removeHeader('Content-Length');  // Essential for live
+      res.removeHeader('Content-Length');
 
       res.writeHead(response.status);
 
@@ -130,8 +128,8 @@ const server = http.createServer(async (req, res) => {
         while (reading) {
           const { done, value } = await reader.read();
           if (done) {
-            console.log('[PROXY] Upstream ended – keeping connection open for next data');
-            break;  // DO NOT call res.end()
+            console.log('[PROXY] Upstream ended – keeping connection open');
+            break;
           }
           const canContinue = res.write(value);
           if (!canContinue) await new Promise(resolve => res.once('drain', resolve));
@@ -140,7 +138,7 @@ const server = http.createServer(async (req, res) => {
         if (err.name !== 'AbortError') console.error('[PROXY] Stream error', err);
       } finally {
         reader.releaseLock();
-        // NEVER CALL res.end() – the socket stays alive for future chunks
+        // NEVER call res.end() – live stream continues
       }
     }
   } catch (error) {
