@@ -25,7 +25,7 @@ function rewritePlaylist(content, targetUrl, proxyBase, proxyPath) {
   const normalizedProxyPath = proxyPath.endsWith('/') ? proxyPath.slice(0, -1) : proxyPath;
   const fullProxyBase = proxyBase + (normalizedProxyPath || '/proxy');
 
-  return content.split(/?/).map(line => {
+  return content.split(/\r?\n/).map(line => {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) {
       // Handle URI= in tags (like #EXT-X-KEY or #EXT-X-MAP)
