@@ -5,21 +5,24 @@ const PORT = process.env.PORT || 3000;
 
 /**
  * Resolves a relative or absolute path against a base URL.
+ * Now handles query parameters correctly by stripping them from the base path.
  */
-function resolveUrl(uri, pathBase, origin) {
+function resolveUrl(uri, targetUrl) {
   if (uri.startsWith('http')) return uri;
-  if (uri.startsWith('/')) return origin + uri;
-  return pathBase + uri;
+  
+  const url = new URL(targetUrl);
+  if (uri.startsWith('/')) return url.origin + uri;
+  
+  // For relative paths, use the directory of the current URL
+  const basePath = url.origin + url.pathname.substring(0, url.pathname.lastIndexOf('/') + 1);
+  return basePath + uri;
 }
 
 /**
  * Rewrites an HLS playlist so all segment URLs point back to this proxy.
  */
 function rewritePlaylist(content, targetUrl, proxyBase, proxyPath) {
-  const targetParsed = new URL(targetUrl);
-  const targetOrigin = targetParsed.origin;
-  const targetPathBase = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
-  
+  // Ensure we don't end up with // in the path
   const normalizedProxyPath = proxyPath.endsWith('/') ? proxyPath.slice(0, -1) : proxyPath;
   const fullProxyBase = proxyBase + (normalizedProxyPath || '/proxy');
 
@@ -30,13 +33,13 @@ function rewritePlaylist(content, targetUrl, proxyBase, proxyPath) {
     if (trimmed.startsWith('#')) {
       // Handle URI= in tags (like #EXT-X-STREAM-INF, #EXT-X-KEY, #EXT-X-MAP, #EXT-X-MEDIA)
       return line.replace(/URI="([^"]+)"/g, (match, uri) => {
-        const absoluteUri = resolveUrl(uri, targetPathBase, targetOrigin);
+        const absoluteUri = resolveUrl(uri, targetUrl);
         return `URI="${fullProxyBase}?url=${encodeURIComponent(absoluteUri)}"`;
       });
     }
 
     // Rewrite plain URL line (segments or variant playlists)
-    const absoluteUri = resolveUrl(trimmed, targetPathBase, targetOrigin);
+    const absoluteUri = resolveUrl(trimmed, targetUrl);
     return `${fullProxyBase}?url=${encodeURIComponent(absoluteUri)}`;
   }).join('\n');
 }
@@ -45,7 +48,7 @@ const server = http.createServer(async (req, res) => {
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Range',
+    'Access-Control-Allow-Headers': 'Content-Type, Range, User-Agent, Referer, Origin',
     'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges',
   };
 
@@ -55,7 +58,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Basic health check
+  // Health check
   if (req.url === '/' || req.url === '/ping') {
     res.writeHead(200, { 'Content-Type': 'text/plain', ...corsHeaders });
     res.end('Proxy Alive');
@@ -63,7 +66,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   const url = new URL(req.url, `http://${req.headers.host}`);
-  const targetUrl = url.searchParams.get('url');
+  let targetUrl = url.searchParams.get('url');
 
   if (!targetUrl) {
     res.writeHead(400, corsHeaders);
@@ -71,28 +74,48 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  console.log(`[PROXY] Fetching: ${targetUrl}`);
+  // Double-check encoding - some clients might double-encode
+  if (targetUrl.startsWith('http%3A')) {
+    targetUrl = decodeURIComponent(targetUrl);
+  }
+
+  console.log(`[PROXY] Req: ${targetUrl}`);
 
   const abortController = new AbortController();
   req.on('close', () => abortController.abort());
 
   try {
+    const target = new URL(targetUrl);
+    
+    // Transparently forward headers to mimic a browser/player
+    const headers = {
+      'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': req.headers['accept'] || '*/*',
+      'Accept-Language': req.headers['accept-language'] || 'en-US,en;q=0.9',
+      'Referer': target.origin + '/',
+      'Connection': 'keep-alive',
+    };
+
+    // If the browser provided an Origin, forward it (mapped to the target)
+    if (req.headers['origin']) {
+        headers['Origin'] = target.origin;
+    }
+
     const response = await fetch(targetUrl, {
       method: 'GET',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': '*/*',
-        'Referer': new URL(targetUrl).origin + '/',
-        'Connection': 'keep-alive',
-      },
+      headers,
       redirect: 'follow',
       signal: abortController.signal
     });
 
+    console.log(`[PROXY] Upstream: ${response.status} (${targetUrl})`);
+
     if (!response.ok) {
-      console.error(`[PROXY] Upstream Error: ${response.status} for ${targetUrl}`);
+      // Forward upstream errors precisely
       res.writeHead(response.status, corsHeaders);
-      res.end(`Provider error: ${response.statusText}`);
+      const errBody = await response.text().catch(() => 'No error body');
+      console.error(`[PROXY] Provider error body: ${errBody.substring(0, 100)}`);
+      res.end(`Provider error ${response.status}: ${response.statusText}`);
       return;
     }
 
@@ -101,6 +124,7 @@ const server = http.createServer(async (req, res) => {
                    contentType.includes('mpegurl') || 
                    contentType.includes('m3u8');
 
+    // Apply response headers
     Object.entries(corsHeaders).forEach(([k, v]) => res.setHeader(k, v));
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 
@@ -114,9 +138,9 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200);
       res.end(rewritten);
     } else {
+      // Binary stream branch (TS segments)
       if (contentType) res.setHeader('Content-Type', contentType);
       
-      // Essential headers for video segments
       ['content-length', 'content-range', 'accept-ranges'].forEach(h => {
         const val = response.headers.get(h);
         if (val) res.setHeader(h, val);
@@ -128,7 +152,6 @@ const server = http.createServer(async (req, res) => {
 
       res.writeHead(response.status);
       
-      // Optimized piping for binary streams
       const reader = response.body.getReader();
       try {
         while (true) {
@@ -142,14 +165,11 @@ const server = http.createServer(async (req, res) => {
       res.end();
     }
   } catch (error) {
-    if (error.name === 'AbortError') {
-      console.log(`[PROXY] Aborted: ${targetUrl}`);
-      return;
-    }
-    console.error(`[PROXY] Fatal: ${error.message} (${targetUrl})`);
+    if (error.name === 'AbortError') return;
+    console.error(`[PROXY] Fatal: ${error.message}`);
     if (!res.headersSent) {
       res.writeHead(502, corsHeaders);
-      res.end(`Proxy error: ${error.message}`);
+      res.end(`Proxy connection failed: ${error.message}`);
     }
   }
 });
