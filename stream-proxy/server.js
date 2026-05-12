@@ -20,11 +20,19 @@ function rewritePlaylist(content, targetUrl, proxyBase, proxyPath) {
     if (!trimmed) return line;
     if (trimmed.startsWith('#')) {
       return line.replace(/URI="([^"]+)"/g, (match, uri) => {
-        const absoluteUri = resolveUrl(uri, targetUrl);
+        let modifiedUri = uri;
+        if (modifiedUri.startsWith('/serve/')) {
+          modifiedUri = modifiedUri.replace('/serve/', '/live/');
+        }
+        const absoluteUri = resolveUrl(modifiedUri, targetUrl);
         return `URI="${fullProxyBase}?url=${encodeURIComponent(absoluteUri)}"`;
       });
     }
-    const absoluteUri = resolveUrl(trimmed, targetUrl);
+    let modifiedTrimmed = trimmed;
+    if (modifiedTrimmed.startsWith('/serve/')) {
+      modifiedTrimmed = modifiedTrimmed.replace('/serve/', '/live/');
+    }
+    const absoluteUri = resolveUrl(modifiedTrimmed, targetUrl);
     return `${fullProxyBase}?url=${encodeURIComponent(absoluteUri)}`;
   }).join('\n');
 }
