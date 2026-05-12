@@ -108,9 +108,12 @@ const server = http.createServer(async (req, res) => {
 
     if (isM3u8) {
       const body = await response.text();
+      console.log(`[PROXY] Original M3U8 Target URL: ${targetUrl}`);
+      console.log(`[PROXY] Original M3U8 Body:\n${body}`);
       const protocol = req.headers['x-forwarded-proto'] || 'http';
       const proxyBase = `${protocol}://${req.headers.host}`;
       const rewritten = rewritePlaylist(body, targetUrl, proxyBase, url.pathname);
+      console.log(`[PROXY] Rewritten M3U8 Body:\n${rewritten}`);
       
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
       res.writeHead(200);
