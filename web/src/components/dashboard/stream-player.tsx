@@ -1,21 +1,16 @@
-// StreamPlayer.tsx
+// StreamPlayer.tsx - MPEG-TS focused player
 "use client";
 
 import { Radio, Tv2, AlertCircle } from "lucide-react";
 import { useEffect, useRef, useState, useCallback } from "react";
-import Hls from "hls.js";
 
 import type { LiveChannel } from "@/lib/types";
 import { 
-  getIptvProxyBases, 
-  normalizeLiveStreamUrl, 
-  isHlsPlaylistUrl, 
-  isMpegTsUrl 
+  getMpegtsProxyUrl,
+  isMpegTsUrl,
 } from "@/lib/stream-url";
 
-// -----------------------------------------------------------------------------
-// Types
-// -----------------------------------------------------------------------------
+// Types for mpegts.js
 type MpegtsPlayer = {
   attachMediaElement(mediaElement: HTMLMediaElement): void;
   load(): void;
@@ -32,18 +27,14 @@ type MpegtsModule = {
     config?: Record<string, unknown>
   ): MpegtsPlayer;
   isSupported(): boolean;
-  Events: { ERROR: string };
+  Events: { ERROR: string; MEDIA_INFO: string };
 };
 
-// -----------------------------------------------------------------------------
 // Constants
-// -----------------------------------------------------------------------------
 const MAX_RETRY_DELAY = 15000;
 const INITIAL_RETRY_DELAY = 1000;
 
-// -----------------------------------------------------------------------------
-// Utilities
-// -----------------------------------------------------------------------------
+// Load mpegts.js module
 async function loadMpegtsModule(): Promise<MpegtsModule | null> {
   try {
     const module = await import("mpegts.js");
@@ -56,12 +47,8 @@ async function loadMpegtsModule(): Promise<MpegtsModule | null> {
   }
 }
 
-// -----------------------------------------------------------------------------
-// Component
-// -----------------------------------------------------------------------------
 export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const hlsRef = useRef<Hls | null>(null);
   const mpegtsRef = useRef<MpegtsPlayer | null>(null);
   
   const [status, setStatus] = useState("Idle");
@@ -70,10 +57,6 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
   const [isBuffering, setIsBuffering] = useState(false);
 
   const cleanup = useCallback(() => {
-    if (hlsRef.current) {
-      hlsRef.current.destroy();
-      hlsRef.current = null;
-    }
     if (mpegtsRef.current) {
       try {
         mpegtsRef.current.pause();
@@ -116,14 +99,9 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     const video = videoRef.current;
     if (!video) return;
 
-    // Detect format based on original URL
-    const originalUrl = channel.streamUrl;
-    const isHls = isHlsPlaylistUrl(originalUrl);
-    
-    // Normalize with appropriate extension
-    const proxyUrl = normalizeLiveStreamUrl(originalUrl, isHls ? "m3u8" : "ts");
-    
-    console.log(`[Player] Starting ${isHls ? 'HLS' : 'TS'} stream:`, proxyUrl);
+    // Get MPEG-TS proxy URL
+    const proxyUrl = getMpegtsProxyUrl(channel.streamUrl);
+    console.log(`[Player] Starting MPEG-TS stream: ${proxyUrl}`);
 
     const startPlayer = async () => {
       cleanup();
@@ -132,120 +110,61 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
       setStatus("Connecting...");
 
       try {
-        if (isHls && Hls.isSupported()) {
-          setStatus("Initialising HLS...");
-          const hls = new Hls({
-            enableWorker: true,
-            lowLatencyMode: true,
-            liveSyncDurationCount: 3,
-            liveMaxLatencyDurationCount: 8,
-            maxBufferLength: 30,
-            maxMaxBufferLength: 60,
-            manifestLoadingTimeOut: 10000,
-            fragLoadingTimeOut: 15000,
-            manifestLoadingMaxRetry: 4,
-            levelLoadingMaxRetry: 4,
-            fragLoadingMaxRetry: 4,
-            xhrSetup: (xhr) => {
-              xhr.withCredentials = false;
-              xhr.setRequestHeader('Cache-Control', 'no-cache');
-            },
-          });
-          
-          hlsRef.current = hls;
-          
-          hls.on(Hls.Events.ERROR, (_, data) => {
-            if (data.fatal) {
-              console.error("[HLS] Fatal error:", data.type, data.details);
-              if (cancelled) return;
-              
-              // Ignore network timeouts and CORS issues - these often resolve on retry
-              if (data.type === 'networkError' || data.details === 'manifestLoadTimeOut' || data.details?.includes('timeout')) {
-                console.warn("[HLS] Network timeout, retrying...");
-                setStatus("Network error, retrying...");
-                setIsBuffering(true);
-              } else {
-                setError(`Connection failed: ${data.details}`);
-              }
-              setStatus("Retrying...");
-              triggerRetry();
-            }
-          });
-
-          hls.on(Hls.Events.MANIFEST_PARSED, () => {
-            if (cancelled) return;
-            setStatus("Live");
-            setIsBuffering(false);
-            video.play().catch(e => {
-              console.warn("[Player] Playback blocked", e);
-              setStatus("Paused (click to play)");
-            });
-          });
-
-          hls.loadSource(proxyUrl);
-          hls.attachMedia(video);
-
-        } else if (!isHls) {
-          setStatus("Initialising MPEG-TS...");
-          const lib = await loadMpegtsModule();
-          
-          if (!lib) {
-            throw new Error("MPEG-TS playback not supported in this browser");
-          }
-
-          const player = lib.createPlayer(
-            { type: "mse", url: proxyUrl, isLive: true },
-            {
-              isLive: true,
-              enableWorker: true,
-              enableStashBuffer: true,
-              stashInitialSize: 128 * 1024,
-              lazyLoad: false,
-              liveBufferLatencyChasing: true,
-              liveBufferLatencyMinRemain: 2,
-              autoCleanupMaxBackupDuration: 300,
-              autoCleanupMinBackupDuration: 120,
-            }
-          );
-          
-          mpegtsRef.current = player;
-          
-          player.on(lib.Events.ERROR, (type, detail) => {
-            console.error("[TS] Player error:", type, detail);
-            if (cancelled) return;
-            
-            // Handle network-related errors gracefully
-            const detailStr = String(detail || '');
-            if (detailStr.includes('timeout') || detailStr.includes('network')) {
-              console.warn("[TS] Network issue, retrying...");
-              setStatus("Network error, retrying...");
-              setIsBuffering(true);
-            } else {
-              setError(`TS error: ${detail}`);
-            }
-            triggerRetry();
-          });
-
-          player.attachMediaElement(video);
-          player.load();
-          player.play().catch(e => {
-            console.warn("[Player] Playback blocked", e);
-            setStatus("Paused");
-          });
-          
-          setStatus("Live");
-          setIsBuffering(false);
-        } else {
-          // Native HLS (Safari)
-          setStatus("Using native HLS...");
-          video.src = proxyUrl;
-          video.load();
-          video.play().catch(() => {
-            if (!cancelled) setStatus("Paused");
-          });
-          setStatus("Live");
-          setIsBuffering(false);
+        setStatus("Initialising MPEG-TS player...");
+        const lib = await loadMpegtsModule();
+        
+        if (!lib) {
+          throw new Error("MPEG-TS playback not supported in this browser");
         }
+
+        const player = lib.createPlayer(
+          { type: "mse", url: proxyUrl, isLive: true },
+          {
+            isLive: true,
+            enableWorker: true,
+            enableStashBuffer: true,
+            stashInitialSize: 128 * 1024,
+            lazyLoad: false,
+            liveBufferLatencyChasing: true,
+            liveBufferLatencyMinRemain: 2,
+            autoCleanupMaxBackupDuration: 300,
+            autoCleanupMinBackupDuration: 120,
+            bufferingTimeout: 30000,
+            flushing: true,
+          }
+        );
+        
+        mpegtsRef.current = player;
+        
+        player.on(lib.Events.ERROR, (type, detail) => {
+          console.error("[TS] Player error:", type, detail);
+          if (cancelled) return;
+          
+          const detailStr = String(detail || '');
+          if (detailStr.includes('timeout') || detailStr.includes('network')) {
+            console.warn("[TS] Network issue, retrying...");
+            setStatus("Network error, retrying...");
+            setIsBuffering(true);
+          } else {
+            setError(`Stream error: ${detail}`);
+          }
+          triggerRetry();
+        });
+
+        player.on(lib.Events.MEDIA_INFO, (mediaInfo) => {
+          console.log("[TS] Media info:", mediaInfo);
+        });
+
+        player.attachMediaElement(video);
+        player.load();
+        
+        player.play().catch(e => {
+          console.warn("[Player] Playback blocked", e);
+          setStatus("Paused (click to play)");
+        });
+        
+        setStatus("Live");
+        setIsBuffering(false);
       } catch (err: any) {
         console.error("[Player] Initialization failed:", err);
         if (!cancelled) {
@@ -435,3 +354,4 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
     </div>
   );
 }
+

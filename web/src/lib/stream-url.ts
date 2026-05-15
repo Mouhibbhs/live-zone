@@ -10,7 +10,6 @@ function isLocalHost(hostname: string): boolean {
 }
 
 function normalizeConfiguredProxyBase(proxyUrl: string): string {
-  // Ensure the URL ends with /proxy so the proxy endpoint is used correctly
   return proxyUrl.replace(/\/+$/,'').replace(/(\/proxy)?$/,'/proxy');
 }
 
@@ -25,10 +24,6 @@ export function getIptvProxyBases(): string[] {
   const isLocal = isLocalHost(host);
   const origin = window.location.origin;
 
-  // 1. User-configured proxy (highest priority, e.g. from Netlify env vars)
-  // 2. Local standalone proxies (highest priority for local dev because they handle M3U8 rewriting)
-  // - 3000 is the default for stream-proxy/server.js
-  // - 8787 is the default for the standalone proxy-server.js
   const localProxy3000 = isLocal ? "http://localhost:3000" : "";
   const localProxy8787 = isLocal ? "http://localhost:8787/proxy" : "";
   const standardProxy = `${origin}/api/proxy`;
@@ -47,11 +42,34 @@ export function getIptvProxyBase(): string {
   return getIptvProxyBases()[0] ?? "";
 }
 
+/**
+ * Get MPEG-TS proxy URL for streaming
+ * Always returns .ts format for mpegts.js player
+ */
+export function getMpegtsProxyUrl(streamUrl: string): string {
+  const trimmed = streamUrl.trim();
+  if (!trimmed) return "";
+
+  // If already proxied, return as-is
+  if (trimmed.includes('?url=')) {
+    return trimmed;
+  }
+
+  const match = trimmed.match(XTREAM_LIVE_STREAM_PATTERN);
+  const directUrl = match ? `${match[1]}.ts${match[2] ?? ""}` : trimmed;
+  
+  const proxyBase = getIptvProxyBase();
+  if (proxyBase) {
+    return `${proxyBase}?url=${encodeURIComponent(directUrl)}`;
+  }
+
+  return directUrl;
+}
+
 export function normalizeLiveStreamUrl(streamUrl: string, ext: "ts" | "m3u8" = "ts"): string {
   const trimmed = streamUrl.trim();
   if (!trimmed) return "";
 
-  // If already proxied, return as-is (avoid double-proxying)
   if (trimmed.includes('?url=')) {
     return trimmed;
   }
@@ -70,9 +88,6 @@ export function normalizeLiveStreamUrl(streamUrl: string, ext: "ts" | "m3u8" = "
 }
 
 export function isHlsPlaylistUrl(streamUrl: string): boolean {
-  // The player may receive a proxied URL (e.g. http://site/.netlify/functions/proxy?url=...)
-  // In that case we need to inspect the original `url` query parameter to determine the
-  // actual media type. If the URL is not proxied we fall back to a simple extension check.
   try {
     const u = new URL(streamUrl);
     const real = u.searchParams.get('url') ?? streamUrl;
