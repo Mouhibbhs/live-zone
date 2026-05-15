@@ -42,17 +42,12 @@ function rewritePlaylist(content, targetUrl, proxyBase, proxyPath) {
 }
 
 const server = http.createServer((req, res) => {
-    // CORS headers - allow requests from any origin
-    const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS, POST',
-      'Access-Control-Allow-Headers': 'Content-Type, Range, Accept-Encoding, User-Agent, Referer',
-      'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Content-Type',
-      'Access-Control-Max-Age': '86400',
-    };
-
-    // Apply CORS headers to all responses
-    Object.entries(corsHeaders).forEach(([k, v]) => res.setHeader(k, v));
+    // CORS headers - Apply FIRST, before any other response
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS, POST');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Content-Type');
+    res.setHeader('Access-Control-Max-Age', '86400');
 
     if (req.method === 'OPTIONS') {
         res.writeHead(204);
@@ -108,7 +103,7 @@ const server = http.createServer((req, res) => {
                            contentType.includes('m3u8') ||
                            contentType.includes('vnd.apple.mpegurl');
 
-            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, public');
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
             res.setHeader('Pragma', 'no-cache');
             res.setHeader('Expires', '0');
 
