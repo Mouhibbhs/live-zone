@@ -141,8 +141,9 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           if (cancelled) return;
           
           const detailStr = String(detail || '');
-          if (detailStr.includes('timeout') || detailStr.includes('network')) {
-            console.warn("[TS] Network issue, retrying...");
+          // HttpStatusCodeInvalid (302) is handled by proxy now, treat as network issue
+          if (detailStr.includes('timeout') || detailStr.includes('network') || detailStr.includes('HttpStatusCode')) {
+            console.warn("[TS] Network/HTTP issue, retrying via proxy...");
             setStatus("Network error, retrying...");
             setIsBuffering(true);
           } else {

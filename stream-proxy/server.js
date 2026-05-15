@@ -4,6 +4,7 @@ import https from 'https';
 import url from 'url';
 
 const PORT = process.env.PORT || 3000;
+const MAX_REDIRECTS = 10;
 
 /**
  * Resolves a relative or absolute path against a base URL.
@@ -35,6 +36,63 @@ function rewritePlaylist(content, targetUrl, proxyBase) {
     const absoluteUri = resolveUrl(trimmed, targetPathBase, targetOrigin);
     return `${proxyBase}?url=${encodeURIComponent(absoluteUri)}`;
   }).join('');
+}
+
+/**
+ * Fetch with automatic redirect handling
+ */
+function fetchWithRedirects(targetUrl, redirectCount = 0) {
+  return new Promise((resolve, reject) => {
+    if (redirectCount > MAX_REDIRECTS) {
+      reject(new Error('Too many redirects'));
+      return;
+    }
+
+    const target = new URL(targetUrl);
+    const protocol = target.protocol === 'https:' ? https : http;
+
+    const options = {
+      hostname: target.hostname,
+      port: target.port || (target.protocol === 'https:' ? 443 : 80),
+      path: `${target.pathname}${target.search}`,
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': target.origin + '/',
+        'Connection': 'keep-alive',
+      },
+      timeout: 60000,
+    };
+
+    const req = protocol.request(options, (res) => {
+      // Handle redirects (301, 302, 303, 307, 308)
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        console.log(`[PROXY] Redirect ${res.statusCode}: ${res.headers.location}`);
+        
+        // Consume the response to free up resources
+        res.on('data', () => {});
+        res.on('end', () => {
+          const redirectUrl = new URL(res.headers.location, targetUrl).toString();
+          fetchWithRedirects(redirectUrl, redirectCount + 1)
+            .then(resolve)
+            .catch(reject);
+        });
+      } else {
+        resolve({ res, targetUrl });
+      }
+    });
+
+    req.on('error', reject);
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Request timeout'));
+    });
+
+    req.end();
+  });
 }
 
 const server = http.createServer((req, res) => {
@@ -70,87 +128,60 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    const protocol = target.protocol === 'https:' ? https : http;
-
     console.log(`[PROXY] Fetching: ${targetUrl}`);
 
-    const upstreamReq = protocol.request(
-        {
-            hostname: target.hostname,
-            port: target.port || (target.protocol === 'https:' ? 443 : 80),
-            path: `${target.pathname}${target.search}`,
-            method: req.method === 'HEAD' ? 'HEAD' : 'GET',
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                'Accept': '*/*',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Referer': target.origin + '/',
-                'Connection': 'keep-alive',
-                ...(req.headers.range && { 'Range': req.headers.range }),
-            },
-            timeout: 60000,
-        },
-        (upstreamRes) => {
-            console.log(`[PROXY] Upstream Status: ${upstreamRes.statusCode} (${targetUrl})`);
-            
-            const contentType = upstreamRes.headers['content-type'] || '';
-            const isM3u8 = targetUrl.toLowerCase().includes('.m3u8') || 
-                           contentType.includes('mpegurl') || 
-                           contentType.includes('m3u8');
+    fetchWithRedirects(targetUrl)
+      .then(({ res: upstreamRes, targetUrl: finalUrl }) => {
+        console.log(`[PROXY] Upstream Status: ${upstreamRes.statusCode} (${finalUrl})`);
+        
+        const contentType = upstreamRes.headers['content-type'] || '';
+        const isM3u8 = finalUrl.toLowerCase().includes('.m3u8') || 
+                       contentType.includes('mpegurl') || 
+                       contentType.includes('m3u8');
 
-            // Set cache control for streaming
-            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-            res.setHeader('Pragma', 'no-cache');
+        // Set cache control for streaming
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
 
-            if (isM3u8) {
-                // Handle M3U8 playlist
-                let body = '';
-                upstreamRes.on('data', chunk => body += chunk);
-                upstreamRes.on('end', () => {
-                    const protocol = req.headers['x-forwarded-proto'] || 'http';
-                    const proxyBase = `${protocol}://${req.headers.host}`;
-                    const rewritten = rewritePlaylist(body, targetUrl, proxyBase);
-                    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
-                    res.setHeader('Content-Length', Buffer.byteLength(rewritten));
-                    res.writeHead(upstreamRes.statusCode || 200);
-                    res.end(rewritten);
-                });
-            } else {
-                // Handle MPEG-TS or other binary streams
-                if (contentType) res.setHeader('Content-Type', contentType);
-                else res.setHeader('Content-Type', 'video/mp2t');
-                
-                // Copy segment headers for smooth streaming
-                ['content-range', 'accept-ranges', 'content-length'].forEach(h => {
-                  if (upstreamRes.headers[h]) res.setHeader(h, upstreamRes.headers[h]);
-                });
-
+        if (isM3u8) {
+            // Handle M3U8 playlist
+            let body = '';
+            upstreamRes.on('data', chunk => body += chunk);
+            upstreamRes.on('end', () => {
+                const protocol = req.headers['x-forwarded-proto'] || 'http';
+                const proxyBase = `${protocol}://${req.headers.host}`;
+                const rewritten = rewritePlaylist(body, finalUrl, proxyBase);
+                res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+                res.setHeader('Content-Length', Buffer.byteLength(rewritten));
                 res.writeHead(upstreamRes.statusCode || 200);
-                upstreamRes.pipe(res);
-            }
-        }
-    );
+                res.end(rewritten);
+            });
+        } else {
+            // Handle MPEG-TS or other binary streams
+            if (contentType) res.setHeader('Content-Type', contentType);
+            else res.setHeader('Content-Type', 'video/mp2t');
+            
+            // Copy segment headers for smooth streaming
+            ['content-range', 'accept-ranges', 'content-length'].forEach(h => {
+              if (upstreamRes.headers[h]) res.setHeader(h, upstreamRes.headers[h]);
+            });
 
-    upstreamReq.on('error', (err) => {
+            res.writeHead(upstreamRes.statusCode || 200);
+            upstreamRes.pipe(res);
+        }
+      })
+      .catch((err) => {
         console.error(`[PROXY] Error for ${targetUrl}:`, err.message);
         if (!res.headersSent) {
             res.writeHead(502, { 'Content-Type': 'text/plain' });
             res.end(`Proxy error: ${err.message}`);
         }
-    });
+      });
 
-    upstreamReq.on('timeout', () => {
-        console.warn(`[PROXY] Timeout for ${targetUrl}`);
-        upstreamReq.destroy();
-    });
-
-    // If client disconnects, stop upstream request
+    // If client disconnects, we can't do much but log it
     req.on('close', () => {
-        upstreamReq.destroy();
+        console.log(`[PROXY] Client disconnected: ${targetUrl}`);
     });
-
-    upstreamReq.end();
 });
 
 server.listen(PORT, () => {
