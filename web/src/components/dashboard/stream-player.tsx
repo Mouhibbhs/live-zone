@@ -136,17 +136,20 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           setStatus("Initialising HLS...");
           const hls = new Hls({
             enableWorker: true,
-            lowLatencyMode: false, // Turn off low latency for better stability
-            liveSyncDurationCount: 5, // Increase buffer from 3 to 5 segments
-            liveMaxLatencyDurationCount: 12,
-            maxBufferLength: 60, // Increase max buffer
-            maxMaxBufferLength: 120,
-            manifestLoadingTimeOut: 20000, // Increase timeout to 20s for Render cold starts
-            fragLoadingTimeOut: 30000, // Increase fragment timeout to 30s
-            manifestLoadingMaxRetry: 6,
-            levelLoadingMaxRetry: 6,
-            fragLoadingMaxRetry: 6,
-            backBufferLength: 60,
+            lowLatencyMode: true,
+            liveSyncDurationCount: 3,
+            liveMaxLatencyDurationCount: 8,
+            maxBufferLength: 30,
+            maxMaxBufferLength: 60,
+            manifestLoadingTimeOut: 10000,
+            fragLoadingTimeOut: 15000,
+            manifestLoadingMaxRetry: 4,
+            levelLoadingMaxRetry: 4,
+            fragLoadingMaxRetry: 4,
+            xhrSetup: (xhr) => {
+              xhr.withCredentials = false;
+              xhr.setRequestHeader('Cache-Control', 'no-cache');
+            },
           });
           
           hlsRef.current = hls;
@@ -156,7 +159,14 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
               console.error("[HLS] Fatal error:", data.type, data.details);
               if (cancelled) return;
               
-              setError(`Connection failed: ${data.details}`);
+              // Ignore network timeouts and CORS issues - these often resolve on retry
+              if (data.type === 'networkError' || data.details === 'manifestLoadTimeOut' || data.details?.includes('timeout')) {
+                console.warn("[HLS] Network timeout, retrying...");
+                setStatus("Network error, retrying...");
+                setIsBuffering(true);
+              } else {
+                setError(`Connection failed: ${data.details}`);
+              }
               setStatus("Retrying...");
               triggerRetry();
             }
@@ -193,6 +203,8 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
               lazyLoad: false,
               liveBufferLatencyChasing: true,
               liveBufferLatencyMinRemain: 2,
+              autoCleanupMaxBackupDuration: 300,
+              autoCleanupMinBackupDuration: 120,
             }
           );
           
@@ -201,7 +213,16 @@ export function StreamPlayer({ channel }: { channel: LiveChannel | null }) {
           player.on(lib.Events.ERROR, (type, detail) => {
             console.error("[TS] Player error:", type, detail);
             if (cancelled) return;
-            setError(`TS error: ${detail}`);
+            
+            // Handle network-related errors gracefully
+            const detailStr = String(detail || '');
+            if (detailStr.includes('timeout') || detailStr.includes('network')) {
+              console.warn("[TS] Network issue, retrying...");
+              setStatus("Network error, retrying...");
+              setIsBuffering(true);
+            } else {
+              setError(`TS error: ${detail}`);
+            }
             triggerRetry();
           });
 

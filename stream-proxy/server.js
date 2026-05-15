@@ -42,16 +42,20 @@ function rewritePlaylist(content, targetUrl, proxyBase, proxyPath) {
 }
 
 const server = http.createServer((req, res) => {
-    // CORS headers
+    // CORS headers - allow requests from any origin
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Range',
-      'Access-Control-Expose-Headers': 'Content-Length, Content-Range',
+      'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS, POST',
+      'Access-Control-Allow-Headers': 'Content-Type, Range, Accept-Encoding, User-Agent, Referer',
+      'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Content-Type',
+      'Access-Control-Max-Age': '86400',
     };
 
+    // Apply CORS headers to all responses
+    Object.entries(corsHeaders).forEach(([k, v]) => res.setHeader(k, v));
+
     if (req.method === 'OPTIONS') {
-        res.writeHead(204, corsHeaders);
+        res.writeHead(204);
         res.end();
         return;
     }
@@ -61,7 +65,7 @@ const server = http.createServer((req, res) => {
     const targetUrl = requestUrl.searchParams.get('url');
 
     if (!targetUrl || typeof targetUrl !== 'string') {
-        res.writeHead(400, corsHeaders);
+        res.writeHead(400, { 'Content-Type': 'text/plain' });
         res.end('Missing ?url= parameter');
         return;
     }
@@ -70,7 +74,7 @@ const server = http.createServer((req, res) => {
     try {
       target = new URL(targetUrl);
     } catch (e) {
-      res.writeHead(400, corsHeaders);
+      res.writeHead(400, { 'Content-Type': 'text/plain' });
       res.end('Invalid target URL');
       return;
     }
@@ -84,13 +88,15 @@ const server = http.createServer((req, res) => {
             hostname: target.hostname,
             port: target.port || (target.protocol === 'https:' ? 443 : 80),
             path: `${target.pathname}${target.search}`,
-            method: 'GET',
+            method: req.method === 'HEAD' ? 'HEAD' : 'GET',
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
                 'Accept': '*/*',
-                'Accept-Encoding': 'identity',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Accept-Language': 'en-US,en;q=0.9',
                 'Referer': target.origin + '/',
                 'Connection': 'keep-alive',
+                ...(req.headers.range && { 'Range': req.headers.range }),
             },
         },
         (upstreamRes) => {
@@ -99,11 +105,12 @@ const server = http.createServer((req, res) => {
             const contentType = upstreamRes.headers['content-type'] || '';
             const isM3u8 = targetUrl.toLowerCase().includes('.m3u8') || 
                            contentType.includes('mpegurl') || 
-                           contentType.includes('m3u8');
+                           contentType.includes('m3u8') ||
+                           contentType.includes('vnd.apple.mpegurl');
 
-            // Copy essential headers
-            Object.entries(corsHeaders).forEach(([k, v]) => res.setHeader(k, v));
-            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, public');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
 
             if (isM3u8) {
                 let body = '';
@@ -113,12 +120,12 @@ const server = http.createServer((req, res) => {
                     const proxyBase = `${protocol}://${req.headers.host}`;
                     const rewritten = rewritePlaylist(body, targetUrl, proxyBase, requestUrl.pathname);
                     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+                    res.setHeader('Content-Length', Buffer.byteLength(rewritten));
                     res.writeHead(upstreamRes.statusCode || 200);
                     res.end(rewritten);
                 });
             } else {
                 if (contentType) res.setHeader('Content-Type', contentType);
-                res.setHeader('Transfer-Encoding', 'chunked');
                 
                 // Copy segment-specific headers
                 ['content-range', 'accept-ranges', 'content-length'].forEach(h => {
@@ -134,7 +141,7 @@ const server = http.createServer((req, res) => {
     upstreamReq.on('error', (err) => {
         console.error(`[PROXY] Error for ${targetUrl}:`, err.message);
         if (!res.headersSent) {
-            res.writeHead(502);
+            res.writeHead(502, { 'Content-Type': 'text/plain' });
             res.end(`Proxy error: ${err.message}`);
         }
     });

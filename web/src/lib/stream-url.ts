@@ -51,6 +51,11 @@ export function normalizeLiveStreamUrl(streamUrl: string, ext: "ts" | "m3u8" = "
   const trimmed = streamUrl.trim();
   if (!trimmed) return "";
 
+  // If already proxied, return as-is (avoid double-proxying)
+  if (trimmed.includes('?url=')) {
+    return trimmed;
+  }
+
   const match = trimmed.match(XTREAM_LIVE_STREAM_PATTERN);
   if (!match) return trimmed;
 
