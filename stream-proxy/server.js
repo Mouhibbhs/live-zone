@@ -1,189 +1,684 @@
-// server.js – MPEG-TS optimized proxy for Render.com
-import http from 'http';
-import https from 'https';
-import url from 'url';
+const http = require("http");
 
-const PORT = process.env.PORT || 3000;
-const MAX_REDIRECTS = 10;
+const https = require("https");
 
-/**
- * Resolves a relative or absolute path against a base URL.
- */
-function resolveUrl(uri, pathBase, origin) {
-  if (uri.startsWith('http')) return uri;
-  if (uri.startsWith('/')) return origin + uri;
-  return pathBase + uri;
+
+
+const PORT = Number(process.env.PORT || process.env.PROXY_PORT || 8787);
+
+const MAX_REDIRECTS = 5;
+
+
+
+const HOP_BY_HOP_HEADERS = new Set([
+
+  "connection",
+
+  "keep-alive",
+
+  "proxy-authenticate",
+
+  "proxy-authorization",
+
+  "te",
+
+  "trailer",
+
+  "transfer-encoding",
+
+  "upgrade",
+
+]);
+
+
+
+const MIME_TYPES = {
+
+  ".m3u8": "application/vnd.apple.mpegurl",
+
+  ".ts": "video/mp2t",
+
+  ".m2ts": "video/mp2t",
+
+  ".mp4": "video/mp4",
+
+  ".m4s": "video/iso.segment",
+
+  ".aac": "audio/aac",
+
+  ".mp3": "audio/mpeg",
+
+};
+
+
+
+const DEFAULT_UPSTREAM_HEADER_PROFILES = [
+
+  {
+
+    userAgent: "VLC/3.0.20 LibVLC/3.0.20",
+
+  },
+
+  {
+
+    userAgent: "IPTVSmartersPlayer",
+
+  },
+
+  {
+
+    userAgent: "TiviMate/4.7.0 (Linux; Android 11)",
+
+  },
+
+  {
+
+    userAgent: "Lavf/60.16.100",
+
+  },
+
+  {
+
+    userAgent:
+
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+
+    referer: "origin",
+
+  },
+
+];
+
+
+
+function corsHeaders() {
+
+  return {
+
+    "Access-Control-Allow-Origin": "*",
+
+    "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+
+    "Access-Control-Allow-Headers": "Content-Type, Range",
+
+    "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
+
+    "Cache-Control": "no-cache, no-store, must-revalidate, no-transform",
+
+    "X-Accel-Buffering": "no",
+
+  };
+
 }
 
-/**
- * Rewrites an HLS playlist so all segment URLs point back to this proxy.
- * Only used if M3U8 is requested.
- */
-function rewritePlaylist(content, targetUrl, proxyBase) {
-  const targetParsed = new URL(targetUrl);
-  const targetOrigin = targetParsed.origin;
-  const targetPathBase = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
 
-  return content.split(/\r?\n/).map(line => {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) {
-      return line.replace(/URI="([^"]+)"/g, (match, uri) => {
-        const absoluteUri = resolveUrl(uri, targetPathBase, targetOrigin);
-        return `URI="${proxyBase}?url=${encodeURIComponent(absoluteUri)}"`;
-      });
-    }
 
-    const absoluteUri = resolveUrl(trimmed, targetPathBase, targetOrigin);
-    return `${proxyBase}?url=${encodeURIComponent(absoluteUri)}`;
-  }).join('');
+function getContentType(pathname) {
+
+  const dotIndex = pathname.lastIndexOf(".");
+
+  const extension = dotIndex >= 0 ? pathname.slice(dotIndex).toLowerCase() : "";
+
+  return MIME_TYPES[extension] || "application/octet-stream";
+
 }
 
-/**
- * Fetch with automatic redirect handling
- */
-function fetchWithRedirects(targetUrl, redirectCount = 0) {
-  return new Promise((resolve, reject) => {
-    if (redirectCount > MAX_REDIRECTS) {
-      reject(new Error('Too many redirects'));
-      return;
-    }
 
-    const target = new URL(targetUrl);
-    const protocol = target.protocol === 'https:' ? https : http;
 
-    const options = {
-      hostname: target.hostname,
-      port: target.port || (target.protocol === 'https:' ? 443 : 80),
-      path: `${target.pathname}${target.search}`,
-      method: 'GET',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': '*/*',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': target.origin + '/',
-        'Connection': 'keep-alive',
-      },
-      timeout: 60000,
-    };
+function getProxyEndpoint(req) {
 
-    const req = protocol.request(options, (res) => {
-      // Handle redirects (301, 302, 303, 307, 308)
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        console.log(`[PROXY] Redirect ${res.statusCode}: ${res.headers.location}`);
-        
-        // Consume the response to free up resources
-        res.on('data', () => {});
-        res.on('end', () => {
-          const redirectUrl = new URL(res.headers.location, targetUrl).toString();
-          fetchWithRedirects(redirectUrl, redirectCount + 1)
-            .then(resolve)
-            .catch(reject);
-        });
-      } else {
-        resolve({ res, targetUrl });
+  const forwardedProto = req.headers["x-forwarded-proto"];
+
+  const rawProtocol = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto || "https";
+
+  const protocol = String(rawProtocol).split(",")[0].trim() || "https";
+
+  return `${protocol}://${req.headers.host}/proxy`;
+
+}
+
+
+
+function proxyUrl(req, value, target) {
+
+  const resolved = new URL(value, target).toString();
+
+  return `${getProxyEndpoint(req)}?url=${encodeURIComponent(resolved)}`;
+
+}
+
+
+
+function rewritePlaylist(req, playlistText, targetUrl) {
+
+  const target = new URL(targetUrl);
+
+
+
+  return playlistText
+
+    .split(/\r?\n/)
+
+    .map((line) => {
+
+      const trimmed = line.trim();
+
+
+
+      if (!trimmed ) {
+
+        return line;
+
       }
-    });
 
-    req.on('error', reject);
-    req.on('timeout', () => {
-      req.destroy();
-      reject(new Error('Request timeout'));
-    });
 
-    req.end();
-  });
+
+      try {
+
+        if (trimmed.startsWith("#")) {
+
+          return line.replace(/URI="([^"]+)"/g, (_match, value) => `URI="${proxyUrl(req, value, target)}"`);
+
+        }
+
+
+
+        return proxyUrl(req, trimmed, target);
+
+      } catch {
+
+        return line;
+
+      }
+
+    })
+
+    .join("\n");
+
 }
+
+
+
+function getUpstreamHeaderProfiles() {
+
+  const configured = process.env.UPSTREAM_USER_AGENT || process.env.UPSTREAM_USER_AGENTS || "";
+
+  const configuredUserAgents = configured
+
+    .split(",")
+
+    .map((value) => value.trim())
+
+    .filter(Boolean);
+
+
+
+  if (configuredUserAgents.length > 0) {
+
+    return configuredUserAgents.map((userAgent) => ({
+
+      userAgent,
+
+      referer: process.env.UPSTREAM_REFERER || "",
+
+    }));
+
+  }
+
+
+
+  return DEFAULT_UPSTREAM_HEADER_PROFILES;
+
+}
+
+
+
+function buildUpstreamHeaders(req, target, profile) {
+
+  const headers = {
+
+    Host: target.host,
+
+    "User-Agent": profile.userAgent,
+
+    Accept: "*/*",
+
+    "Icy-MetaData": "1",
+
+    "Cache-Control": "no-cache",
+
+    Pragma: "no-cache",
+
+  };
+
+
+
+  const referer = profile.referer === "origin" ? target.origin : profile.referer;
+
+
+
+  if (referer) {
+
+    headers.Referer = referer;
+
+  }
+
+
+
+  if (req.headers.range) {
+
+    headers.Range = req.headers.range;
+
+  }
+
+
+
+  return headers;
+
+}
+
+
+
+function writeProxyHeaders(res, upstream, target) {
+
+  const headers = corsHeaders();
+
+
+
+  for (const [name, value] of Object.entries(upstream.headers)) {
+
+    const lowerName = name.toLowerCase();
+
+
+
+    if (!HOP_BY_HOP_HEADERS.has(lowerName) && lowerName !== "content-length") {
+
+      headers[name] = value;
+
+    }
+
+  }
+
+
+
+  if (!headers["content-type"] && !headers["Content-Type"]) {
+
+    headers["Content-Type"] = getContentType(target.pathname);
+
+  }
+  
+  headers["Transfer-Encoding"] = "chunked";
+
+
+  res.writeHead(upstream.statusCode || 200, headers);
+
+}
+
+
+
+function pipeBinary(req, res, upstream, target, firstChunk) {
+
+  writeProxyHeaders(res, upstream, target);
+
+
+
+  if (firstChunk && req.method !== "HEAD") {
+
+    res.write(firstChunk);
+
+  }
+
+
+
+  upstream.pipe(res);
+
+}
+
+
+
+function handlePlaylist(req, res, upstream, targetUrl, firstChunk) {
+
+  const chunks = [];
+
+
+
+  if (firstChunk) {
+
+    chunks.push(firstChunk);
+
+  }
+
+
+
+  upstream.on("data", (chunk) => chunks.push(chunk));
+
+  upstream.on("end", () => {
+
+    const playlist = Buffer.concat(chunks).toString("utf8");
+
+    const rewritten = rewritePlaylist(req, playlist, targetUrl);
+
+
+
+    res.writeHead(upstream.statusCode || 200, {
+
+      ...corsHeaders(),
+
+      "Content-Type": "application/vnd.apple.mpegurl",
+
+    });
+
+
+
+    if (req.method === "HEAD") {
+
+      res.end();
+
+      return;
+
+    }
+
+
+
+    res.end(rewritten);
+
+  });
+
+}
+
+
+
+function proxyRequest(req, res, targetUrl, redirectCount = 0, userAgentIndex = 0) {
+
+  let target;
+
+
+
+  try {
+
+    target = new URL(targetUrl);
+
+  } catch {
+
+    res.writeHead(400, { ...corsHeaders(), "Content-Type": "text/plain" });
+
+    res.end("Invalid url parameter");
+
+    return;
+
+  }
+
+
+
+  const client = target.protocol === "https:" ? https : http;
+
+  const headerProfiles = getUpstreamHeaderProfiles();
+
+  const headerProfile = headerProfiles[userAgentIndex] || headerProfiles[0];
+
+  const upstreamReq = client.request(
+
+    {
+
+      protocol: target.protocol,
+
+      hostname: target.hostname,
+
+      port: target.port || (target.protocol === "https:" ? 443 : 80),
+
+      path: `${target.pathname}${target.search}`,
+
+      method: req.method,
+
+      headers: buildUpstreamHeaders(req, target, headerProfile),
+
+      timeout: 0,
+
+    },
+
+    (upstream) => {
+
+      if (
+
+        upstream.statusCode &&
+
+        upstream.statusCode >= 300 &&
+
+        upstream.statusCode < 400 &&
+
+        upstream.headers.location
+
+      ) {
+
+        if (redirectCount >= MAX_REDIRECTS) {
+
+          upstream.resume();
+
+          res.writeHead(508, { ...corsHeaders(), "Content-Type": "text/plain" });
+
+          res.end("Proxy redirect limit exceeded");
+
+          return;
+
+        }
+
+
+
+        const redirectedUrl = new URL(upstream.headers.location, targetUrl).toString();
+
+        upstream.resume();
+
+        proxyRequest(req, res, redirectedUrl, redirectCount + 1, userAgentIndex);
+
+        return;
+
+      }
+
+
+
+      if ((upstream.statusCode === 401 || upstream.statusCode === 403) && userAgentIndex < headerProfiles.length - 1) {
+
+        upstream.resume();
+
+        proxyRequest(req, res, targetUrl, redirectCount, userAgentIndex + 1);
+
+        return;
+
+      }
+
+
+
+      if (!upstream.statusCode || upstream.statusCode >= 400) {
+
+        writeProxyHeaders(res, upstream, target);
+
+        upstream.pipe(res);
+
+        return;
+
+      }
+
+
+
+      const contentType = String(upstream.headers["content-type"] || "").toLowerCase();
+
+      const maybePlaylist = contentType.includes("mpegurl") || contentType.includes("m3u8") || target.pathname.endsWith(".m3u8");
+
+      let receivedData = false;
+
+
+
+      if (!maybePlaylist) {
+
+        pipeBinary(req, res, upstream, target);
+
+        return;
+
+      }
+
+
+
+      upstream.once("data", (firstChunk) => {
+
+        receivedData = true;
+
+        const looksLikePlaylist = firstChunk.toString("utf8", 0, Math.min(firstChunk.length, 32)).includes("#EXTM3U");
+
+
+
+        if (contentType.includes("mpegurl") || contentType.includes("m3u8") || looksLikePlaylist) {
+
+          handlePlaylist(req, res, upstream, targetUrl, firstChunk);
+
+          return;
+
+        }
+
+
+
+        pipeBinary(req, res, upstream, target, firstChunk);
+
+      });
+
+
+
+      upstream.once("end", () => {
+
+        if (!receivedData && !res.headersSent) {
+
+          res.writeHead(upstream.statusCode || 200, {
+
+            ...corsHeaders(),
+
+            "Content-Type": "application/vnd.apple.mpegurl",
+
+          });
+
+          res.end("");
+
+        }
+
+      });
+
+    },
+
+  );
+
+
+
+  upstreamReq.on("error", (error) => {
+
+    if (!res.headersSent) {
+
+      res.writeHead(502, { ...corsHeaders(), "Content-Type": "text/plain" });
+
+    }
+
+    res.end(`Proxy error: ${error.message}`);
+
+  });
+
+
+
+  upstreamReq.end();
+
+}
+
+
 
 const server = http.createServer((req, res) => {
-    // CORS headers - Apply FIRST for maximum compatibility
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS, POST');
-    res.setHeader('Access-Control-Allow-Headers', '*');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Content-Type');
-    res.setHeader('Access-Control-Max-Age', '86400');
 
-    if (req.method === 'OPTIONS') {
-        res.writeHead(204);
-        res.end();
-        return;
-    }
+  if (req.method === "OPTIONS") {
 
-    // Parse the target stream URL from query parameter
-    const requestUrl = new URL(req.url, `http://${req.headers.host}`);
-    const targetUrl = requestUrl.searchParams.get('url');
+    res.writeHead(204, {
 
-    if (!targetUrl || typeof targetUrl !== 'string') {
-        res.writeHead(400, { 'Content-Type': 'text/plain' });
-        res.end('Missing ?url= parameter');
-        return;
-    }
+      ...corsHeaders(),
 
-    let target;
-    try {
-      target = new URL(targetUrl);
-    } catch (e) {
-      res.writeHead(400, { 'Content-Type': 'text/plain' });
-      res.end('Invalid target URL');
-      return;
-    }
+      "Access-Control-Max-Age": "86400",
 
-    console.log(`[PROXY] Fetching: ${targetUrl}`);
-
-    fetchWithRedirects(targetUrl)
-      .then(({ res: upstreamRes, targetUrl: finalUrl }) => {
-        console.log(`[PROXY] Upstream Status: ${upstreamRes.statusCode} (${finalUrl})`);
-        
-        const contentType = upstreamRes.headers['content-type'] || '';
-        const isM3u8 = finalUrl.toLowerCase().includes('.m3u8') || 
-                       contentType.includes('mpegurl') || 
-                       contentType.includes('m3u8');
-
-        // Set cache control for streaming
-        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-        res.setHeader('Pragma', 'no-cache');
-
-        if (isM3u8) {
-            // Handle M3U8 playlist
-            let body = '';
-            upstreamRes.on('data', chunk => body += chunk);
-            upstreamRes.on('end', () => {
-                const protocol = req.headers['x-forwarded-proto'] || 'http';
-                const proxyBase = `${protocol}://${req.headers.host}`;
-                const rewritten = rewritePlaylist(body, finalUrl, proxyBase);
-                res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
-                res.setHeader('Content-Length', Buffer.byteLength(rewritten));
-                res.writeHead(upstreamRes.statusCode || 200);
-                res.end(rewritten);
-            });
-        } else {
-            // Handle MPEG-TS or other binary streams
-            if (contentType) res.setHeader('Content-Type', contentType);
-            else res.setHeader('Content-Type', 'video/mp2t');
-            
-            // Copy segment headers for smooth streaming
-            ['content-range', 'accept-ranges', 'content-length'].forEach(h => {
-              if (upstreamRes.headers[h]) res.setHeader(h, upstreamRes.headers[h]);
-            });
-
-            res.writeHead(upstreamRes.statusCode || 200);
-            upstreamRes.pipe(res);
-        }
-      })
-      .catch((err) => {
-        console.error(`[PROXY] Error for ${targetUrl}:`, err.message);
-        if (!res.headersSent) {
-            res.writeHead(502, { 'Content-Type': 'text/plain' });
-            res.end(`Proxy error: ${err.message}`);
-        }
-      });
-
-    // If client disconnects, we can't do much but log it
-    req.on('close', () => {
-        console.log(`[PROXY] Client disconnected: ${targetUrl}`);
     });
+
+    res.end();
+
+    return;
+
+  }
+
+
+
+  if (req.method !== "GET" && req.method !== "HEAD") {
+
+    res.writeHead(405, { ...corsHeaders(), "Content-Type": "text/plain" });
+
+    res.end("Method not allowed");
+
+    return;
+
+  }
+
+
+
+  const requestUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+
+
+
+  if (requestUrl.pathname === "/health") {
+
+    res.writeHead(200, { ...corsHeaders(), "Content-Type": "application/json" });
+
+    res.end(JSON.stringify({ ok: true }));
+
+    return;
+
+  }
+
+
+
+  if (requestUrl.pathname !== "/proxy") {
+
+    res.writeHead(404, { ...corsHeaders(), "Content-Type": "text/plain" });
+
+    res.end("Not found");
+
+    return;
+
+  }
+
+
+
+  const targetUrl = requestUrl.searchParams.get("url");
+
+
+
+  if (!targetUrl) {
+
+    res.writeHead(400, { ...corsHeaders(), "Content-Type": "text/plain" });
+
+    res.end("Missing url parameter");
+
+    return;
+
+  }
+
+
+
+  proxyRequest(req, res, targetUrl);
+
 });
 
+
+
+server.requestTimeout = 0;
+
+server.headersTimeout = 0;
+
+server.keepAliveTimeout = 0;
+
+
+
 server.listen(PORT, () => {
-  console.log(`✅ LiveZone MPEG-TS Proxy ready on port ${PORT}`);
+
+  console.log(`LiveZone stream proxy listening on port ${PORT}`);
+
 });

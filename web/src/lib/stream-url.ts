@@ -9,70 +9,56 @@ function isLocalHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1";
 }
 
+function getProductionProxyBase(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  // When deployed on Netlify, use the Netlify function proxy path.
+  // Netlify functions are accessible under `/.netlify/functions/<function-name>`.
+  // The original server proxy was mounted at `/api/proxy` in the Next.js app.
+  // Netlify creates a function named `proxy` that mirrors this endpoint.
+  // Detect Netlify deployment via the hostname pattern (ends with `.netlify.app`).
+  const host = window.location.hostname;
+  if (host.endsWith(".netlify.app")) {
+    return `${window.location.origin}/.netlify/functions/proxy`;
+  }
+
+  // Default to the Next.js API route when not on Netlify.
+  return `${window.location.origin}/api/proxy`;
+}
+
 function normalizeConfiguredProxyBase(proxyUrl: string): string {
+  // Ensure the URL ends with /proxy so the proxy endpoint is used correctly
   return proxyUrl.replace(/\/+$/,'').replace(/(\/proxy)?$/,'/proxy');
 }
 
 export function getIptvProxyBases(): string[] {
-  const configuredProxy = IPTV_PROXY_URL ? normalizeConfiguredProxyBase(IPTV_PROXY_URL) : "";
-
   if (typeof window === "undefined") {
-    return configuredProxy ? [configuredProxy] : [];
+    // Server‑side: only use the configured proxy URL if present.
+    return IPTV_PROXY_URL ? [normalizeConfiguredProxyBase(IPTV_PROXY_URL)] : [];
   }
 
   const host = window.location.hostname;
-  const isLocal = isLocalHost(host);
-  const origin = window.location.origin;
 
-  const localProxy3000 = isLocal ? "http://localhost:3000" : "";
-  const localProxy8787 = isLocal ? "http://localhost:8787/proxy" : "";
-  const standardProxy = `${origin}/api/proxy`;
-  const netlifyFunctionProxy = host.endsWith(".netlify.app") ? `${origin}/.netlify/functions/proxy` : "";
+  // Netlify deployment – use only the Netlify function proxy.
+  if (host.endsWith('.netlify.app')) {
+    const netlifyProxy = getProductionProxyBase();
+    return netlifyProxy ? [netlifyProxy] : [];
+  }
 
-  return [
-    configuredProxy,
-    localProxy3000,
-    localProxy8787,
-    standardProxy,
-    netlifyFunctionProxy
-  ].filter(Boolean);
+  // Non‑Netlify environments – use the Next.js API proxy.
+  const nextJsProxy = `${window.location.origin}/api/proxy`;
+  return nextJsProxy ? [nextJsProxy] : [];
 }
 
 export function getIptvProxyBase(): string {
   return getIptvProxyBases()[0] ?? "";
 }
 
-/**
- * Get MPEG-TS proxy URL for streaming
- * Always returns .ts format for mpegts.js player
- */
-export function getMpegtsProxyUrl(streamUrl: string): string {
-  const trimmed = streamUrl.trim();
-  if (!trimmed) return "";
-
-  // If already proxied, return as-is
-  if (trimmed.includes('?url=')) {
-    return trimmed;
-  }
-
-  const match = trimmed.match(XTREAM_LIVE_STREAM_PATTERN);
-  const directUrl = match ? `${match[1]}.ts${match[2] ?? ""}` : trimmed;
-  
-  const proxyBase = getIptvProxyBase();
-  if (proxyBase) {
-    return `${proxyBase}?url=${encodeURIComponent(directUrl)}`;
-  }
-
-  return directUrl;
-}
-
 export function normalizeLiveStreamUrl(streamUrl: string, ext: "ts" | "m3u8" = "ts"): string {
   const trimmed = streamUrl.trim();
   if (!trimmed) return "";
-
-  if (trimmed.includes('?url=')) {
-    return trimmed;
-  }
 
   const match = trimmed.match(XTREAM_LIVE_STREAM_PATTERN);
   if (!match) return trimmed;
@@ -88,6 +74,9 @@ export function normalizeLiveStreamUrl(streamUrl: string, ext: "ts" | "m3u8" = "
 }
 
 export function isHlsPlaylistUrl(streamUrl: string): boolean {
+  // The player may receive a proxied URL (e.g. http://site/.netlify/functions/proxy?url=...)
+  // In that case we need to inspect the original `url` query parameter to determine the
+  // actual media type. If the URL is not proxied we fall back to a simple extension check.
   try {
     const u = new URL(streamUrl);
     const real = u.searchParams.get('url') ?? streamUrl;
